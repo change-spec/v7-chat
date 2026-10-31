@@ -24,7 +24,7 @@
   - 文本：`max(10, ceil(字数/20) * 10)` Credits
   - 文件：`max(20, ceil(大小/1MB) * 20)` Credits
   - 文件传输助手中的收发**免费**（仅自己可见）
-- **云存储**：1190 Credits/MB/月，单账号上限 60MB；Root-Admin 免费 1GB 永久空间；上传/下载免费，转载按文件价计费
+- **云存储**：1190 Credits/MB/月，单账号上限 60MB；Root-Admin 免费 8GB 永久空间；上传/下载免费，转载按文件价计费
 - **文件服务**：服务端持久化 7 天，按 64KB 分块落库（`chat_file_chunks` / `cloud_file_chunks`）
 - **管理能力**：账号增删、OTP 兑换码、Credits 流水、系统日志、API Key 签发
 
