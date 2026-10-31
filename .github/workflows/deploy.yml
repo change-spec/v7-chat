@@ -1,0 +1,60 @@
+name: Deploy to Cloudflare Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # esbuild 用于把 src/index.ts 打成 Pages 的 _worker.js
+      - name: Install esbuild
+        run: npm install --no-save esbuild@0.28.2
+
+      - name: Build Pages bundle
+        run: node build-pages.mjs
+
+      # `wrangler pages deploy` 不支持 -c 指定配置路径，只认默认 wrangler.toml，
+      # 而仓库里的 wrangler.toml 是本地开发配置 → 部署前临时切换为 Pages 配置
+      - name: Switch to Pages config
+        run: |
+          cp wrangler.toml wrangler.worker.local.toml
+          cp wrangler.pages.toml wrangler.toml
+
+      # Durable Object 宿主 Worker：Pages 不能自己创建 DO，必须先部署它
+      # （Pages 通过 script_name 绑定该命名空间，所以顺序上必须在前）
+      - name: Deploy Durable Object host worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy -c wrangler.do.toml
+
+      # Cloudflare Pages 部署（需 CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID 两个 secret）
+      - name: Deploy to Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name v7-chat --branch main
+
+      - name: Summary
+        run: echo "Deployed to https://v7-chat.pages.dev"
