@@ -1173,7 +1173,7 @@ async function handleFileGet(request: Request, env: Env): Promise<Response> {
 // ===== 云存储 =====
 const CLOUD_COST_PER_MB = 1190;
 const CLOUD_CAP_MB = 60;
-const RA_CLOUD_MB = 1024; // Root-Admin 专属免费云空间：1GB 永久
+const RA_CLOUD_MB = 8192; // Root-Admin 专属免费云空间：8GB 永久
 const CLOUD_MONTH_MS = 30 * 24 * 3600 * 1000;
 
 async function pointsOf(env: Env, username: string): Promise<number> {
@@ -1197,6 +1197,12 @@ async function ensureRASub(env: Env, user: { username: string; role: string }): 
   if (!existing) {
     await env.DB.prepare("INSERT INTO cloud_subs (username, total_mb, used_mb, expires_at, auto_renew, kind, created_at) VALUES (?, ?, 0, '2099-12-31T00:00:00Z', 0, 'free', ?)")
       .bind(user.username, RA_CLOUD_MB, new Date().toISOString()).run();
+    return;
+  }
+  // 存量升级：RA 的免费额度随 RA_CLOUD_MB 提升（如 1GB → 8GB），只升不降
+  if (existing.kind === "free" && existing.total_mb < RA_CLOUD_MB) {
+    await env.DB.prepare("UPDATE cloud_subs SET total_mb = ? WHERE username = ? AND kind = 'free'")
+      .bind(RA_CLOUD_MB, user.username).run();
   }
 }
 async function cloudStatus(env: Env, user: { username: string; role: string }): Promise<any> {
@@ -1249,7 +1255,7 @@ async function handleCloudStatus(request: Request, env: Env): Promise<Response> 
 async function handleCloudBuy(request: Request, env: Env): Promise<Response> {
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
-  if (user.role === "root-admin") return json({ error: "Root-Admin 已免费拥有 1GB（1024MB）永久云空间，无需购买" }, 400);
+  if (user.role === "root-admin") return json({ error: "Root-Admin 已免费拥有 8GB（8192MB）永久云空间，无需购买" }, 400);
   let body: { mb?: number; autoRenew?: boolean };
   try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
   const mb = Math.floor(Number(body.mb) || 0);
@@ -1378,7 +1384,7 @@ async function handleCloudUpload(request: Request, env: Env): Promise<Response> 
   let quotaMb = 0;
   if (isRA) quotaMb = RA_CLOUD_MB;
   else { const sub = await getCloudSub(env, user.username); quotaMb = sub ? sub.total_mb : 0; }
-  if (quotaMb <= 0) return json({ error: "你还没有云空间，请先购买（Root-Admin 免费 1GB 永久）" }, 409);
+  if (quotaMb <= 0) return json({ error: "你还没有云空间，请先购买（Root-Admin 免费 8GB 永久）" }, 409);
   const used = await sumCloudUsed(env, user.username);
   const quotaBytes = quotaMb * 1024 * 1024;
   if (used + size > quotaBytes) {
