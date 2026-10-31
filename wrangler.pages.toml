@@ -1,0 +1,16 @@
+# Cloudflare Pages 项目配置
+# 官方限制：Pages 不能自己创建 Durable Object，
+# 因此 ROOM 绑定指向独立的 DO 宿主 Worker（cloud-chat-do）。
+name = "v7-chat"
+compatibility_date = "2025-09-01"
+pages_build_output_dir = "dist"
+
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "Room"
+script_name = "cloud-chat-do"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "v7-chat-db"
+database_id = "ca1f7479-5c41-4a1e-8ae4-836617d277d5"

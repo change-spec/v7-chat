@@ -1,0 +1,36 @@
+# ===== 绝不能进公网仓库的东西 =====
+
+# 本地会话令牌（含 root-admin token）——最高危
+.token_backup.json
+*token*.json
+*.token
+.env
+.env.*
+!.env.example
+
+# Cloudflare / 凭据
+.wrangler/
+.dev.vars
+.dev.vars.*
+wrangler.local.toml
+
+# 依赖与构建产物
+node_modules/
+dist/
+dist-hold/
+
+# 本地运行日志与测试产物
+.devlog.txt
+*.log
+.uitest/
+.screenshots/
+
+# 系统垃圾
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 编辑器
+.vscode/
+.idea/
+*.swp

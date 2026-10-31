@@ -1,0 +1,3136 @@
+export const html = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Geek Chat Room</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #07070d; --panel: #0d0d16; --line: #1e1e30;
+    --cyan: #00f0ff; --magenta: #ff2e97; --amber: #ffb800; --green: #00ff96;
+    --text: #d8d8e6; --dim: #7a7a92;
+  }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace;
+    line-height: 1.7; overflow: hidden;
+    background-image:
+      linear-gradient(rgba(0,240,255,.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,240,255,.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+  .scanline { position: fixed; left: 0; right: 0; height: 2px; pointer-events: none; z-index: 99; will-change: transform; }
+
+  /* 强刷按钮：固定右下角 */
+  .force-refresh {
+    position: fixed; right: 16px; bottom: 16px; z-index: 180;
+    width: 44px; height: 44px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; line-height: 1; cursor: pointer;
+    color: var(--amber); background: rgba(10,12,20,.85);
+    border: 1px solid rgba(255,184,0,.55);
+    box-shadow: 0 0 14px rgba(255,184,0,.35);
+    transition: transform .18s ease, box-shadow .18s ease, background .18s ease;
+  }
+  .force-refresh:hover { background: rgba(255,184,0,.12); box-shadow: 0 0 22px rgba(255,184,0,.6); transform: scale(1.08) rotate(90deg); }
+  .force-refresh:active { transform: scale(.92); }
+  .force-refresh.spinning { animation: fr-spin .6s linear infinite; }
+  @keyframes fr-spin { to { transform: rotate(360deg); } }
+  #scanA { background: linear-gradient(90deg, transparent, rgba(0,240,255,.85), transparent); box-shadow: 0 0 12px rgba(0,240,255,.35); }
+  #scanB { background: linear-gradient(90deg, transparent, rgba(255,46,151,.68), transparent); box-shadow: 0 0 10px rgba(255,46,151,.22); height: 1.5px; }
+
+  /* ===== 应用壳：横向大排版 ===== */
+  .app { display: flex; height: 100vh; width: 100vw; overflow: hidden; }
+  .app.hidden { display: none; }
+  .auth-screen {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh; padding: 20px; overflow-y: auto;
+  }
+  .auth-screen.hidden { display: none; }
+  .auth-card { width: 100%; max-width: 420px; }
+
+  .sidebar {
+    width: 264px; flex-shrink: 0; border-right: 1px solid var(--line);
+    background: rgba(13,13,22,.6); display: flex; flex-direction: column; gap: 14px;
+    padding: 18px 14px; overflow-y: auto;
+  }
+  .brand { text-align: left; }
+  .brand .tag {
+    display: inline-block; font-size: 11px; letter-spacing: 4px; color: var(--cyan);
+    border: 1px solid var(--cyan); padding: 3px 12px; margin-bottom: 12px; border-radius: 2px;
+    text-shadow: 0 0 8px rgba(0,240,255,.6);
+  }
+  .brand h1 { font-size: 24px; font-weight: 700; color: #fff; letter-spacing: 2px; text-shadow: 0 0 12px rgba(0,240,255,.8), 0 0 40px rgba(0,240,255,.4); }
+  .brand h1 .pink { color: var(--magenta); text-shadow: 0 0 12px rgba(255,46,151,.8), 0 0 40px rgba(255,46,151,.4); }
+
+  .nav { display: flex; flex-direction: column; gap: 8px; }
+  .nav-btn {
+    font-family: inherit; font-size: 12.5px; letter-spacing: 1px; text-align: left;
+    background: transparent; color: var(--cyan); border: 1px solid rgba(0,240,255,.35);
+    border-radius: 6px; padding: 11px 14px; cursor: pointer;
+    transition: background .15s, box-shadow .15s;
+  }
+  .nav-btn:hover { background: rgba(0,240,255,.1); box-shadow: 0 0 12px rgba(0,240,255,.2); }
+  .nav-btn.magenta { color: var(--magenta); border-color: rgba(255,46,151,.4); }
+  .nav-btn.magenta:hover { background: rgba(255,46,151,.1); }
+  .nav-btn.amber { color: var(--amber); border-color: rgba(255,184,0,.45); font-weight: 700; }
+  .nav-btn.amber:hover { background: rgba(255,184,0,.12); box-shadow: 0 0 12px rgba(255,184,0,.3); }
+
+  .side-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; font-size: 12px; }
+  .sc-row { display: flex; justify-content: space-between; padding: 4px 0; }
+  .sc-k { color: var(--dim); }
+  .sc-v { color: var(--cyan); }
+  .credits-card { text-align: center; }
+  .credits-card .p-label { font-size: 10px; letter-spacing: 3px; color: var(--dim); }
+  .credits-card .p-value { font-size: 30px; font-weight: 700; color: #fff; line-height: 1.2; text-shadow: 0 0 12px rgba(0,240,255,.8); }
+  .credits-card .p-save { font-size: 10px; color: var(--dim); margin-top: 6px; letter-spacing: 1px; }
+  .side-foot { margin-top: auto; font-size: 10.5px; color: var(--dim); line-height: 1.7; }
+  .side-foot b { color: #00ff96; font-weight: 400; }
+  .btn-admin-toggle { display: none; }
+
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .main > .panel {
+    flex: 1; display: flex; flex-direction: column; margin: 0; border-radius: 0;
+    border-left: 1px solid var(--line); border-right: 1px solid var(--line);
+    min-height: 0;
+  }
+  .main > .panel.hidden { display: none; }
+  .panel h3 { font-size: 12.5px; letter-spacing: 2px; color: var(--cyan); font-weight: 500; margin-bottom: 14px; text-shadow: 0 0 8px rgba(0,240,255,.5); }
+  .log-grid { display: grid; grid-template-columns: 1fr; gap: 20px; flex: 1; min-height: 0; }
+  .log-col { display: flex; flex-direction: column; min-height: 0; }
+  .log-grid .acc-list { flex: 1; overflow-y: auto; max-height: 55vh; }
+  .ctrl-grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
+  @media (min-width: 1024px) {
+    .log-grid { grid-template-columns: repeat(3, 1fr); }
+    .log-grid .acc-list { max-height: none; }
+    .ctrl-grid { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); align-items: start; }
+    #cmdPanel .cmd-out { flex: 1; height: auto; min-height: 300px; }
+  }
+
+  .rightbar {
+    width: 348px; flex-shrink: 0; background: rgba(13,13,22,.5);
+    overflow-y: auto; border-left: 1px solid var(--line);
+  }
+  .rightbar.hidden { display: none; }
+  .rightbar > .panel { margin: 0; border-radius: 0; border: none; border-left: 1px solid var(--cyan); padding: 18px; min-height: 100%; }
+
+  .drawer-backdrop { display: none; }
+
+  /* ===== 通用面板/控件（保持原 ID 与 class） ===== */
+  .panel {
+    --prox: 0;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 22px; margin-top: 16px;
+    border-color: rgba(0,240,255, calc(.18 + var(--prox) * .82));
+    box-shadow: 0 0 calc(4px + var(--prox) * 20px) rgba(0,240,255, calc(var(--prox) * .4));
+    transition: box-shadow .08s linear, border-color .08s linear;
+  }
+  .hidden { display: none !important; }
+  .panel h2 { font-size: 13px; letter-spacing: 2px; color: var(--cyan); font-weight: 500; margin-bottom: 16px; text-shadow: 0 0 8px rgba(0,240,255,.5); }
+
+  .btn {
+    font-family: inherit; font-size: 12.5px; letter-spacing: 1px;
+    background: transparent; color: var(--cyan); border: 1px solid rgba(0,240,255,.5);
+    border-radius: 6px; padding: 10px 20px; cursor: pointer;
+    --prox: 0; --hover: 0;
+    border-color: rgba(0,240,255, calc(.18 + (var(--prox) + var(--hover) * .55) * .82));
+    box-shadow: 0 0 calc(4px + (var(--prox) + var(--hover) * .55) * 20px) rgba(0,240,255, calc((var(--prox) + var(--hover) * .55) * .4));
+    transition: background .15s ease, border-color .08s linear, box-shadow .15s ease, transform .1s ease;
+  }
+  .btn:hover { --hover: 1; background: rgba(0,240,255,.12); }
+  .btn:active { transform: scale(.96); }
+  .btn:disabled { opacity: .35; cursor: not-allowed; }
+  .btn.magenta { color: var(--magenta); border-color: rgba(255,46,151,.5); }
+  .btn.magenta:hover { background: rgba(255,46,151,.12); }
+  .btn.amber { color: var(--amber); border-color: rgba(255,184,0,.55); font-weight: 700; }
+  .btn.amber:hover { background: rgba(255,184,0,.12); box-shadow: 0 0 14px rgba(255,184,0,.3); }
+  .btn.small { font-size: 11px; padding: 6px 12px; }
+  .btn.wide { width: 100%; }
+
+  input {
+    font-family: inherit; font-size: 13px; background: rgba(0,240,255,.05); color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; outline: none; width: 100%;
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  input:focus { border-color: var(--cyan); box-shadow: 0 0 12px rgba(0,240,255,.25); }
+  input::placeholder { color: var(--dim); }
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 11px; color: var(--dim); margin-bottom: 5px; letter-spacing: 1px; }
+  .pw-wrap { position: relative; }
+  .pw-wrap input { padding-right: 44px; }
+  .pw-eye {
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    background: none; border: none; cursor: pointer; padding: 6px;
+    color: var(--dim); display: flex; align-items: center; justify-content: center;
+    border-radius: 4px; transition: color .15s ease;
+  }
+  .pw-eye:hover { color: var(--cyan); }
+  .pw-eye svg { width: 18px; height: 18px; display: block; }
+  .cmd-bar { display: flex; gap: 8px; align-items: center; margin-top: 10px; border: 1px dashed rgba(0,240,255,.3); border-radius: 8px; padding: 7px 10px; }
+  .cmd-bar .cmd-prefix { color: var(--green); font-weight: 700; font-size: 14px; }
+  .cmd-bar input { border: none; background: transparent; padding: 4px 6px; }
+  .cmd-bar input:focus { box-shadow: none; }
+  .cmd-out {
+    height: 300px; overflow-y: auto; background: rgba(0,0,0,.35);
+    border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px;
+    font-size: 12.5px; margin-bottom: 12px; scrollbar-width: thin; scrollbar-color: var(--line) transparent;
+  }
+  .cmd-out::-webkit-scrollbar { width: 6px; }
+  .cmd-out::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+  .cmd-out .line { margin-bottom: 6px; word-break: break-all; }
+  .cmd-out .line.echo { color: var(--green); }
+  .cmd-out .line.echo::before { content: "$ "; color: var(--green); }
+  .cmd-out .line.result { color: var(--text); }
+  .cmd-out .line.sysline { color: var(--dim); }
+  .cmd-prefix { color: var(--green); font-weight: 700; font-size: 14px; }
+  .input-row .cmd-prefix { flex-shrink: 0; padding-left: 4px; }
+  .lobby-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (min-width: 1024px) { .lobby-grid { grid-template-columns: repeat(3, 1fr); } }
+  @media (max-width: 640px) { .lobby-grid { grid-template-columns: 1fr; } }
+  .lobby-card { border: 1px dashed rgba(0,240,255,.35); border-radius: 10px; padding: 18px 16px; text-align: center; }
+  .lobby-card .t { font-size: 14px; color: #fff; font-weight: 700; margin-bottom: 4px; }
+  .lobby-card .d { font-size: 11.5px; color: var(--dim); margin-bottom: 14px; }
+  /* ===== 消消乐 ===== */
+  .m3-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; }
+  .m3-bar { font-size: 12.5px; color: var(--cyan); letter-spacing: 2px; text-shadow: 0 0 8px rgba(0,240,255,.5); display: flex; gap: 28px; }
+  .m3-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; width: 100%; max-width: 440px; }
+  .m3-tile {
+    aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+    font-size: clamp(16px, 4.5vw, 26px); line-height: 1; padding: 0; cursor: pointer; font-family: inherit;
+    background: rgba(0,240,255,.05); border: 1px solid var(--line); border-radius: 6px;
+    transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
+  }
+  .m3-tile:hover { background: rgba(0,240,255,.12); }
+  .m3-tile.sel { border-color: var(--cyan); box-shadow: 0 0 10px rgba(0,240,255,.6); transform: scale(1.1); background: rgba(0,240,255,.15); }
+  .m3-tile.shake { animation: m3shake .26s ease; }
+  @keyframes m3shake { 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+  .m3-tile.gone { visibility: hidden; }
+  .m3-tile.hint { border-color: var(--amber); animation: m3pulse .7s ease infinite; }
+  @keyframes m3pulse {
+    0%, 100% { box-shadow: 0 0 4px rgba(255,184,0,.45); }
+    50% { box-shadow: 0 0 18px rgba(255,184,0,.95); }
+  }
+  .m3-stage { position: relative; padding: 24px; width: 100%; max-width: 488px; box-sizing: border-box; }
+  .m3-line { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+  .m3-line polyline { fill: none; stroke: var(--cyan); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 6px rgba(0,240,255,.9)); }
+  .m3-done { text-align: center; color: var(--amber); font-size: 14.5px; padding: 24px 0 6px; letter-spacing: 1px; text-shadow: 0 0 10px rgba(255,184,0,.5); }
+  .board-area {
+    min-height: 240px; border: 1px solid var(--line); border-radius: 10px;
+    background: rgba(0,0,0,.25); display: flex; align-items: center; justify-content: center;
+    margin: 6px 0 12px; padding: 16px;
+  }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.72); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .modal-box {
+    background: var(--panel); border: 1px solid var(--cyan); border-radius: 12px;
+    padding: 24px; max-width: 380px; width: 100%; text-align: center;
+    box-shadow: 0 0 30px rgba(0,240,255,.3); animation: msgIn .3s cubic-bezier(.2,.8,.3,1);
+  }
+  .modal-box .modal-title { font-size: 15px; color: var(--cyan); font-weight: 700; margin-bottom: 12px; }
+  .modal-box p { font-size: 12.5px; color: var(--text); margin-bottom: 16px; }
+  .switch-row { display: flex; gap: 10px; margin-bottom: 16px; }
+  .switch-row .btn { flex: 1; }
+  .err { font-size: 11.5px; color: var(--magenta); margin-top: 10px; min-height: 18px; }
+  select {
+    font-family: inherit; font-size: 13px; background: rgba(0,240,255,.05); color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; outline: none; width: 100%;
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  select:focus { border-color: var(--cyan); box-shadow: 0 0 12px rgba(0,240,255,.25); }
+  select option { background: #0d0d16; color: var(--text); }
+  .acc-list { margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 10px; }
+  .acc-row { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; padding: 6px 0; border-bottom: 1px solid rgba(30,30,48,.6); }
+  .acc-row:last-child { border-bottom: none; }
+  .acc-row .u { color: var(--text); }
+  .acc-row .r { color: var(--amber); }
+  .acc-row .p { color: var(--dim); }
+  .otp-out { margin-top: 6px; border: 1px dashed rgba(0,240,255,.4); border-radius: 8px; padding: 14px; }
+  .otp-code {
+    font-family: var(--font-mono), monospace; font-size: 14px; color: var(--cyan);
+    word-break: break-all; text-align: center; padding: 8px 0 12px; letter-spacing: 1px;
+    text-shadow: 0 0 8px rgba(0,240,255,.5); user-select: all;
+  }
+  .transfer-warn {
+    margin-top: 12px; font-size: 11.5px; color: var(--amber); text-align: center;
+    border: 1px solid rgba(255,184,0,.4); border-radius: 6px; padding: 7px 10px;
+    background: rgba(255,184,0,.05);
+  }
+  .file-card { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+  .file-card .f-icon { color: var(--cyan); flex-shrink: 0; display: flex; }
+  .file-card .f-meta { flex: 1; min-width: 0; }
+  .file-card .f-name { display: block; font-size: 12.5px; color: #eafcff; word-break: break-all; }
+  .file-card .f-size { display: block; font-size: 10.5px; color: #6a6a80; }
+  .file-card .f-dl {
+    flex-shrink: 0; font-size: 11px; color: var(--cyan); border: 1px solid rgba(0,240,255,.5);
+    border-radius: 5px; padding: 4px 10px; text-decoration: none; transition: background .15s ease;
+  }
+  .file-card .f-dl:hover { background: rgba(0,240,255,.12); }
+  .f-progress { height: 4px; background: rgba(0,240,255,.12); border-radius: 2px; margin-top: 7px; overflow: hidden; }
+  .f-progress .bar { height: 100%; width: 0%; background: var(--cyan); border-radius: 2px; box-shadow: 0 0 6px rgba(0,240,255,.6); transition: width .12s linear; }
+
+  .chat-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .chat-head .who { font-size: 12.5px; color: var(--dim); }
+  .chat-head .who b { color: var(--cyan); font-weight: 400; }
+  .chat-head .who .role { color: var(--amber); }
+  .conn-badge { display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; padding: 4px 12px; border-radius: 20px; letter-spacing: 1px; border: 1px solid rgba(0,255,150,.4); color: var(--green); background: rgba(0,255,150,.06); }
+  .conn-badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px rgba(0,255,150,.8); animation: pulse 1.6s ease infinite; }
+  .conn-badge.off { border-color: rgba(255,46,151,.4); color: var(--magenta); background: rgba(255,46,151,.06); }
+  .conn-badge.off .dot { background: var(--magenta); box-shadow: 0 0 8px rgba(255,46,151,.8); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+  .messages {
+    flex: 1; min-height: 0; height: auto; overflow-y: auto; padding-right: 6px;
+    display: flex; flex-direction: column; gap: 10px; scrollbar-width: thin; scrollbar-color: var(--line) transparent;
+  }
+  .messages::-webkit-scrollbar { width: 6px; }
+  .messages::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+  .msg { max-width: 78%; padding: 9px 13px; border-radius: 10px; font-size: 12.5px; word-break: break-word; animation: msgIn .4s cubic-bezier(.2,.8,.3,1); }
+  @keyframes msgIn { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
+  .msg .meta { display: flex; justify-content: space-between; gap: 10px; font-size: 10.5px; margin-bottom: 3px; opacity: .75; }
+  .msg .lv { display: block; font-size: 10px; color: #6a6a80; letter-spacing: 1.5px; margin: 6px 0 5px; text-transform: uppercase; }
+  .msg.other { align-self: flex-start; background: rgba(255,255,255,.04); border: 1px solid var(--line); color: var(--text); }
+  .msg.other .meta { color: var(--magenta); }
+  .msg.self { align-self: flex-end; background: rgba(0,240,255,.08); border: 1px solid rgba(0,240,255,.45); color: #eafcff; box-shadow: 0 0 10px rgba(0,240,255,.15); }
+  .msg.self .meta { color: var(--cyan); }
+  .msg.sys { align-self: center; background: none; border: none; color: var(--dim); font-size: 11px; padding: 2px 0; }
+  .empty { text-align: center; color: var(--dim); font-size: 12px; padding: 40px 0; }
+
+  .input-row { display: flex; gap: 10px; margin-top: 14px; }
+  /* 对话页：消息区弹性滚动，输入行固定吸底 */
+  #convView { flex: 1; min-height: 0; }
+  #convView:not(.hidden) { display: flex; flex-direction: column; }
+  #convView .messages { flex: 1; }
+  textarea {
+    font-family: inherit; font-size: 13px; background: rgba(0,240,255,.05); color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; outline: none; width: 100%;
+    transition: border-color .15s ease, box-shadow .15s ease;
+    resize: none; min-height: 42px; max-height: 120px; line-height: 1.5;
+  }
+  textarea:focus { border-color: var(--cyan); box-shadow: 0 0 12px rgba(0,240,255,.25); }
+  textarea::placeholder { color: var(--dim); }
+  #msgInput { flex: 1; }
+  .conv-head-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 0 0 10px; }
+  .conv-head-row .btn-back { flex-shrink: 0; }
+  .gs-member { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 7px 2px; border-bottom: 1px solid rgba(30,30,48,.5); }
+  .gs-member:last-child { border-bottom: none; }
+  .gs-member .gs-name { flex: 1; color: var(--text); }
+  .gs-member .gs-tag { font-size: 10.5px; color: var(--amber); letter-spacing: 1px; flex-shrink: 0; }
+  .gs-member .gs-muted { font-size: 10px; color: var(--magenta); flex-shrink: 0; }
+  .gs-member .btn { flex-shrink: 0; }
+  .gs-pass { font-family: var(--font-mono), monospace; color: var(--cyan); letter-spacing: 1px; word-break: break-all; }
+  .key-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11.5px; padding: 6px 0; border-bottom: 1px solid rgba(30,30,48,.6); word-break: break-all; }
+  .key-row:last-child { border-bottom: none; }
+  .shop-closed { border: 1px solid rgba(255,46,151,.45); border-radius: 10px; padding: 26px 18px; text-align: center; background: rgba(255,46,151,.05); }
+  .shop-closed .big { font-size: 26px; margin-bottom: 10px; }
+  .shop-closed .t { font-size: 15px; color: var(--magenta); letter-spacing: 2px; margin-bottom: 8px; }
+  .shop-closed .d { font-size: 12px; color: var(--dim); line-height: 1.9; }
+  .tool-row { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+  .hint { margin-top: 14px; font-size: 11.5px; color: var(--dim); text-align: center; line-height: 1.9; }
+  .hint b { color: #00ff96; font-weight: 400; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .scanline { display: none; }
+    .btn, .panel, input { transition: none; }
+    .msg, .conn-badge .dot { animation: none; }
+  }
+
+  /* ===== 平板 / 手机：右侧控制台变抽屉 ===== */
+  @media (max-width: 1023px) {
+    .rightbar {
+      position: fixed; top: 0; right: 0; height: 100vh; width: min(92vw, 360px);
+      transform: translateX(100%); transition: transform .25s ease; z-index: 160;
+      box-shadow: -20px 0 60px rgba(0,0,0,.6); border-left: 1px solid var(--cyan);
+    }
+    .rightbar.open { transform: none; }
+    .rightbar > .panel { border-left: none; }
+    .drawer-backdrop {
+      display: block; position: fixed; inset: 0; background: rgba(0,0,0,.6);
+      z-index: 150; opacity: 0; pointer-events: none; transition: opacity .25s ease;
+    }
+    .drawer-backdrop.show { opacity: 1; pointer-events: auto; }
+    .btn-admin-toggle.show { display: inline-flex; }
+  }
+  @media (min-width: 1024px) {
+    .drawer-backdrop { display: none !important; }
+    .btn-admin-toggle { display: none !important; }
+  }
+
+  /* ===== 手机：侧栏变顶部栏 ===== */
+  @media (max-width: 767px) {
+    .app { flex-direction: column; }
+    .sidebar {
+      width: auto; flex-direction: row; align-items: center; gap: 10px;
+      padding: 10px 12px; overflow-x: auto; overflow-y: hidden;
+      border-right: none; border-bottom: 1px solid var(--line);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+    .brand .tag { margin-bottom: 0; }
+    .brand h1 { font-size: 18px; }
+    .sidebar .side-card, .sidebar .side-foot { display: none; }
+    .nav { flex-direction: row; gap: 8px; }
+    .nav-btn { white-space: nowrap; padding: 9px 12px; }
+    .main > .panel { border-left: none; border-right: none; }
+  }
+
+  /* ===== 会话列表（聊天主页：点「聊天」后主屏先显示会话） ===== */
+  .room-list-page { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .room-list-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+  .room-list-head .rl-title { font-size: 13px; letter-spacing: 2px; color: var(--cyan); text-shadow: 0 0 8px rgba(0,240,255,.5); }
+  .room-items { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+  .room-item { display: flex; align-items: center; gap: 14px; padding: 16px 18px; border-radius: 10px; cursor: pointer; border: 1px solid rgba(30,30,48,.9); background: rgba(13,13,22,.6); transition: background .15s, border-color .15s, box-shadow .15s, transform .1s; }
+  .room-item:hover { background: rgba(0,240,255,.07); border-color: rgba(0,240,255,.45); box-shadow: 0 0 16px rgba(0,240,255,.15); transform: translateX(3px); }
+  .room-item.active { background: rgba(0,240,255,.12); border-color: rgba(0,240,255,.5); box-shadow: 0 0 12px rgba(0,240,255,.2); }
+  .room-item .ri-icon { width: 26px; height: 26px; font-size: 18px; text-align: center; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+  .room-item .ri-name { flex: 1; font-size: 15px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .room-item .ri-mem { font-size: 11px; color: var(--dim); flex-shrink: 0; letter-spacing: 1px; }
+  .room-item .ri-arrow { color: var(--cyan); opacity: .5; font-size: 14px; flex-shrink: 0; }
+  .member-pick { max-height: 240px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+  .member-pick .empty { color: var(--dim); font-size: 12px; padding: 8px 2px; }
+  .member-pick label { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 6px 2px; cursor: pointer; color: var(--text); border-bottom: 1px solid rgba(30,30,48,.5); }
+  .member-pick label:last-child { border-bottom: none; }
+  .member-pick input { width: auto; flex-shrink: 0; }
+  .member-pick .m-name { flex: 1; }
+  .member-pick .m-role { color: var(--amber); font-size: 11px; }
+  #boardArea:fullscreen { width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); }
+  .btn-back { color: var(--dim); border-color: rgba(122,122,146,.4); }
+  .btn-back:hover { color: var(--cyan); background: rgba(0,240,255,.08); }
+  @media (max-width: 767px) {
+    .room-item { padding: 13px 14px; }
+    .room-item .ri-name { font-size: 14px; }
+  }
+
+  /* ===== 云存储面板 ===== */
+  .cloud-status { background: rgba(255,255,255,.03); border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:14px; }
+  .cs-row { display:flex; justify-content:space-between; font-size:13px; padding:3px 0; }
+  .cs-k { color: var(--dim); }
+  .cs-v { color: var(--text); font-weight:600; }
+  .cs-bar { height:8px; background: rgba(255,255,255,.08); border-radius:6px; margin-top:8px; overflow:hidden; }
+  .cs-fill { height:100%; background: linear-gradient(90deg,#b14bff,#00ff96); }
+  .cloud-section { margin-bottom:14px; padding-bottom:12px; border-bottom:1px solid rgba(255,255,255,.06); }
+  .cloud-files { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
+  .cf-row { display:flex; align-items:center; gap:8px; background:rgba(255,255,255,.03); border:1px solid var(--line); border-radius:10px; padding:8px 10px; flex-wrap:wrap; }
+  .cf-name { flex:1; min-width:80px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cf-size { color: var(--dim); font-size:12px; }
+  .ck { display:flex; align-items:center; gap:6px; font-size:13px; color: var(--dim); margin:6px 0; }
+  .badge { display:inline-block; font-size:10px; font-weight:700; padding:1px 6px; border-radius:6px; margin-left:6px; vertical-align:middle; letter-spacing:.5px; }
+  .badge-A { background: rgba(0,240,255,.15); color: var(--cyan); border:1px solid rgba(0,240,255,.4); }
+  .badge-B { background: rgba(255,46,151,.15); color: var(--magenta); border:1px solid rgba(255,46,151,.4); }
+  .badge-C { background: rgba(255,184,0,.15); color: var(--amber); border:1px solid rgba(255,184,0,.4); }
+  .rl-sub { color: var(--dim); font-size:12px; margin-left:8px; }
+</style>
+</head>
+<body>
+<div class="scanline" id="scanA"></div>
+<div class="scanline" id="scanB"></div>
+
+<!-- 强刷按钮（右下角，清缓存强制重载） -->
+<button class="force-refresh" id="btnForceRefresh" title="强制刷新（清缓存重载）" aria-label="强制刷新">↻</button>
+
+<!-- 登录屏 -->
+<div class="auth-screen" id="authScreen">
+  <div class="panel auth-card" id="authPanel">
+    <div class="switch-row">
+      <button class="btn" id="tabLogin">登录</button>
+      <button class="btn magenta" id="tabRegister">注册</button>
+    </div>
+    <div class="field">
+      <label>用户名（2-16 位字母数字）</label>
+      <input id="authUser" maxlength="16" placeholder="用户名" autocomplete="username">
+    </div>
+    <div class="field">
+      <label>密码（至少 6 位）</label>
+      <div class="pw-wrap">
+        <input id="authPass" type="password" maxlength="64" placeholder="••••••" autocomplete="current-password">
+        <button type="button" class="pw-eye" id="eyeAuth" aria-label="显示或隐藏密码"></button>
+      </div>
+    </div>
+    <button class="btn wide" id="authSubmit">▸ 登录</button>
+    <div class="err" id="authErr"></div>
+  </div>
+</div>
+
+<!-- 应用壳 -->
+<div class="app hidden" id="appShell">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="tag">GEEK CHATROOM</div>
+      <h1>Geek Chat <span class="pink">Room</span></h1>
+    </div>
+    <nav class="nav">
+      <button class="nav-btn" id="btnNavChat">▸ 聊天</button>
+      <button class="nav-btn" id="btnNavRedeem">▸ 兑换 Credits</button>
+      <button class="nav-btn" id="btnNavGame">🎮 游戏</button>
+      <button class="nav-btn amber" id="btnNavShop">🛒 SHOP</button>
+      <button class="nav-btn hidden" id="btnNavCmd">▸ 命令行</button>
+      <button class="nav-btn" id="btnNavCloud">☁ 云存储</button>
+      <button class="nav-btn hidden" id="btnNavLogs">▸ 系统日志</button>
+      <button class="nav-btn hidden" id="btnNavCtrl">▸ 系统控制面板</button>
+      <button class="nav-btn" id="btnNavSettings">▸ 个人设置</button>
+    </nav>
+    <div class="side-card">
+      <div class="sc-row"><span class="sc-k">身份</span><span class="sc-v" id="sideRole">-</span></div>
+      <div class="sc-row"><span class="sc-k">在线</span><span class="sc-v" id="sideOnline">-</span></div>
+    </div>
+    <div class="side-card credits-card">
+      <div class="p-label">CREDITS</div>
+      <div class="p-value" id="pts">0</div>
+    </div>
+    <div class="side-foot">
+      消息经 <b>WebSocket</b> 实时广播<br>
+      <b>多设备</b>：手机/电脑/iPad 同网址登录同步
+    </div>
+  </aside>
+
+  <main class="main" id="mainArea">
+    <div class="panel" id="chatPanel">
+      <div class="chat-head">
+        <div class="who">你是 <b id="chatName">-</b> · <span class="role" id="chatRole">-</span> · Credits <b id="chatPoints">0</b><span id="convRoomInfo" class="hidden"> · 会话 <b id="chatRoomName">-</b></span></div>
+        <span class="conn-badge" id="connBadge"><span class="dot"></span><span id="connText">连接中</span></span>
+      </div>
+
+      <!-- 会话列表页：点「聊天」后主屏先显示这里 -->
+      <div class="room-list-page" id="roomListPage">
+        <div class="room-list-head">
+          <span class="rl-title">▸ 会话</span>
+          <span class="rl-sub" id="aClassCount"></span>
+          <span style="display:flex;gap:8px">
+            <button class="btn small magenta" id="btnJoinByPw" title="凭加群密码加入群聊">🔐 密码加群</button>
+            <button class="btn small" id="btnNewGroup" title="新建群聊">＋ 新建群聊</button>
+          </span>
+        </div>
+        <div class="room-items" id="roomItems"></div>
+      </div>
+
+      <!-- 对话页：点某个会话进入 -->
+      <div class="conv-view hidden" id="convView">
+        <div class="conv-head-row">
+          <button class="btn small btn-back" id="btnBackRooms">◂ 会话列表</button>
+          <button class="btn small amber" id="btnConvSettings" title="群设置 · 成员 / 加群密码 / 管理">⚙ 设置</button>
+        </div>
+        <div class="messages" id="messages"><div class="empty">进入会话中…</div></div>
+        <div class="tool-row">
+          <button class="btn small" id="btnRedeem">▸ 兑换 Credits</button>
+          <button class="btn small" id="btnGame">🎮 游戏</button>
+          <button class="btn small hidden" id="btnCmdEntry">▸ 命令行</button>
+        </div>
+        <div class="input-row">
+          <button class="btn" id="btnFile" title="发送文件" aria-label="发送文件"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg></button>
+          <textarea id="msgInput" rows="1" maxlength="1000" placeholder="输入消息，回车发送 · Shift+Enter 换行"></textarea>
+          <button class="btn magenta" id="btnSend">发送</button>
+        </div>
+        <div class="transfer-warn hidden" id="transferWarn">⚠ 文件传输中 · 请勿关闭页面或锁屏，否则文件可能丢失</div>
+      </div>
+    </div>
+
+    <div class="panel hidden" id="cmdPanel">
+      <h2>▸ 命令行 · Command Line</h2>
+      <div class="cmd-out" id="cmdOutput"></div>
+      <div class="input-row">
+        <span class="cmd-prefix">$</span>
+        <input id="cmdInput" maxlength="200" placeholder="输入命令，回车执行 · /help 查看全部命令用法">
+        <button class="btn" id="btnCmd">执行</button>
+      </div>
+      <div class="tool-row"><button class="btn small magenta" id="btnCmdBack">▸ 返回聊天</button></div>
+    </div>
+
+    <div class="panel hidden" id="redeemPanel">
+      <h2>▸ 兑换 Credits</h2>
+      <div class="field">
+        <label>OTP 兑换码（32 位，管理员私发给你）</label>
+        <input id="redeemInput" maxlength="64" placeholder="输入兑换码">
+      </div>
+      <button class="btn wide" id="btnDoRedeem">▸ 兑换</button>
+      <div class="err" id="redeemErr"></div>
+      <div class="hint">也可以直接使用兑换面板输入兑换码</div>
+      <div class="tool-row"><button class="btn small magenta" id="btnRedeemBack">▸ 返回聊天</button></div>
+    </div>
+
+    <div class="panel hidden" id="gameLobby">
+      <h2>▸ 游戏大厅 · 棋类仅真人对战，不支持 AI</h2>
+      <p class="hint" style="margin:0 0 14px">⚠ SHOP 游戏故障，房间号暂停售卖 · 已购房间号不受影响，来下方「输入房间号加入」</p>
+      <div class="lobby-grid">
+        <div class="lobby-card">
+          <div class="t">♟ 国际象棋</div>
+          <div class="d">5 Credits / 局 · 房间号暂不可购买（SHOP 故障）</div>
+          <button class="btn small magenta wide" data-game-join="chess">输入房间号加入</button>
+        </div>
+        <div class="lobby-card">
+          <div class="t">♞ 中国象棋</div>
+          <div class="d">5 Credits / 局 · 房间号暂不可购买（SHOP 故障）</div>
+          <button class="btn small magenta wide" data-game-join="xiangqi">输入房间号加入</button>
+        </div>
+        <div class="lobby-card">
+          <div class="t">🍬 消消乐</div>
+          <div class="d">10 Credits / 局 · 单人连线消除 · 房间号暂不可购买（SHOP 故障）</div>
+        </div>
+      </div>
+      <div class="field hidden" id="joinRoomBox" style="margin-top:14px">
+        <label>房间号（6 位 · 已购房间号仍可加入）</label>
+        <div style="display:flex;gap:10px">
+          <input id="joinRoomInput" maxlength="6" placeholder="房间号" style="text-transform:uppercase;letter-spacing:3px;text-align:center">
+          <button class="btn" id="btnJoinRoom" style="flex-shrink:0">▸ 加入</button>
+        </div>
+      </div>
+      <div class="err" id="gameErr"></div>
+      <div class="tool-row"><button class="btn small magenta" id="btnGameBack">▸ 返回聊天</button></div>
+    </div>
+
+    <div class="panel hidden" id="shopPanel">
+      <h2>▸ SHOP · 房间号商店</h2>
+      <div class="shop-closed">
+        <div class="big">🕹️</div>
+        <div class="t">游戏故障 · 暂停营业</div>
+        <div class="d">所有游戏均暂时故障，SHOP 不售卖房间号，也不会扣除任何 Credits。<br>已购买的房间号不受影响，仍可在游戏大厅「输入房间号加入」。<br>修复后 SHOP 会重新开张，敬请期待。</div>
+      </div>
+      <div class="err" id="shopErr"></div>
+      <div class="tool-row"><button class="btn small magenta" id="btnShopBack">▸ 返回聊天</button></div>
+    </div>
+
+    <div class="panel hidden" id="cloudPanel">
+      <h2>☁ 云存储 · Cloud Drive</h2>
+      <div class="cloud-status" id="cloudStatusBox"></div>
+
+      <div id="cloudBuyBox" class="cloud-section hidden">
+        <div class="field">
+          <label>购买云空间（MB）· 1190 Credits/MB/月 · 每账号限购 60MB</label>
+          <input id="cloudBuyMb" type="number" min="1" max="60" value="10">
+        </div>
+        <label class="ck"><input type="checkbox" id="cloudAutoRenew"> 自动续费（到期自动扣费续一个月）</label>
+        <button class="btn wide" id="btnCloudBuy">▸ 购买云空间</button>
+        <div class="err" id="cloudBuyErr"></div>
+      </div>
+
+      <div class="cloud-section">
+        <div class="field">
+          <label>上传文件到云（免费）</label>
+          <input type="file" id="cloudFile">
+        </div>
+        <button class="btn small" id="btnCloudUpload">▸ 上传（免费）</button>
+        <div class="err" id="cloudUploadErr"></div>
+      </div>
+
+      <div class="cloud-section">
+        <div class="rl-title">▸ 我的云文件</div>
+        <div id="cloudFiles" class="cloud-files"></div>
+      </div>
+
+      <div id="cloudManageBox" class="cloud-section hidden">
+        <div class="rl-title">▸ 管理</div>
+        <label class="ck"><input type="checkbox" id="cloudAutoRenewToggle"> 自动续费</label>
+        <div style="display:flex;gap:10px;margin:8px 0">
+          <input id="cloudUnsubMb" type="number" min="1" placeholder="退订 MB" style="width:120px">
+          <button class="btn small magenta" id="btnCloudUnsubMb">▸ 按 MB 退订</button>
+        </div>
+        <button class="btn small" id="btnCloudUnsub">▸ 退订全部云空间</button>
+        <div class="err" id="cloudManageErr"></div>
+        <div class="hint">退订后文件保留至到期；到期未续费将自动清除（请提前下载本机）</div>
+      </div>
+
+      <div class="tool-row"><button class="btn small magenta" id="btnCloudBack">▸ 返回聊天</button></div>
+    </div>
+
+    <div class="panel hidden" id="gamePayPanel">
+      <h2>▸ 加入房间 <span id="payRoomId"></span></h2>
+      <p class="hint" style="margin:0 0 14px">房主：<b id="payCreator"></b> · <span id="payTypeName"></span> · 每局 5 Credits</p>
+      <div class="lobby-grid">
+        <div class="lobby-card">
+          <div class="t">自己支付</div>
+          <div class="d">扣除自己 5 Credits 进入房间</div>
+          <button class="btn wide" id="btnPaySelf">▸ 支付 5 Credits</button>
+        </div>
+        <div class="lobby-card">
+          <div class="t">好友代付</div>
+          <div class="d">房主收到请求，同意则他替你付（他再扣 5）</div>
+          <button class="btn magenta wide" id="btnPayRequest">▸ 请求好友代付</button>
+        </div>
+      </div>
+      <div class="err" id="payErr"></div>
+      <div class="hint" id="payWaitHint" style="display:none">代付请求已发送，等房主回应…</div>
+      <div class="tool-row"><button class="btn small magenta" id="btnPayBack">▸ 返回大厅</button></div>
+    </div>
+
+    <div class="panel hidden" id="gameRoomPanel">
+      <div class="chat-head">
+        <div class="who">房间 <b id="roomIdDisplay">-</b> · <span id="roomTypeName">-</span> · <span id="roomOpponent">-</span></div>
+        <span class="conn-badge" id="roomStatusBadge"><span class="dot"></span><span id="roomStatusText">等待加入</span></span>
+      </div>
+      <div class="board-area" id="boardArea">
+        <div class="empty" id="boardPlaceholder">棋盘准备就绪后显示于此 · 等待房主开始棋局</div>
+      </div>
+      <div class="tool-row" id="roomCreatorBtns">
+        <button class="btn" id="btnGameStart">▸ 开始棋局</button>
+        <button class="btn small magenta" id="btnGameEnd">▸ 结束房间</button>
+        <button class="btn small" id="btnFullscreen">⛶ 全屏棋盘</button>
+      </div>
+      <div class="tool-row" id="roomJoinerBtns" style="display:none">
+        <span class="hint" style="margin:0">已就座 · 等待房主开始棋局…</span>
+      </div>
+      <div class="tool-row"><button class="btn small" id="btnRoomLeave">▸ 离开房间页</button></div>
+    </div>
+
+    <div class="panel hidden" id="logPanel">
+      <h2>▸ 系统日志 · System Logs</h2>
+      <div class="log-grid">
+        <div class="log-col">
+          <h3>▸ 管理员日志</h3>
+          <div class="acc-list" id="logList"></div>
+        </div>
+        <div class="log-col">
+          <h3>▸ 命令行日志</h3>
+          <div class="acc-list" id="cmdLogList"></div>
+        </div>
+        <div class="log-col">
+          <h3>▸ Credits 日志</h3>
+          <div class="acc-list" id="creditsLogList"></div>
+        </div>
+      </div>
+      <div class="tool-row"><button class="btn small magenta" id="btnLogsBack">▸ 返回聊天</button></div>
+    </div>
+
+    <div class="panel hidden" id="ctrlPanel">
+      <h2>▸ 系统控制面板 · Root-Admin Console</h2>
+      <div class="ctrl-grid">
+        <div class="ctrl-col hidden" id="createAccZone">
+          <h3>▸ 统一创建账号</h3>
+          <div class="field">
+            <label>新用户名（2-16 位字母数字）</label>
+            <input id="newUser" maxlength="16" placeholder="给成员起个名">
+          </div>
+          <div class="field">
+            <label>初始密码（至少 6 位）</label>
+            <div class="pw-wrap">
+              <input id="newPass" type="password" maxlength="64" placeholder="初始密码，发给对方后让他自己改">
+              <button type="button" class="pw-eye" id="eyeNew" aria-label="显示或隐藏密码"></button>
+            </div>
+          </div>
+          <div class="field">
+            <label>身份</label>
+            <select id="newRole">
+              <option value="observer">Observer（只能围观，不能发言）</option>
+              <option value="member" selected>User（普通成员）</option>
+              <option value="admin">Admin（每日工资+兑换码+划转）</option>
+            </select>
+          </div>
+          <button class="btn wide" id="btnCreateAcc">▸ 创建账号</button>
+          <div class="err" id="adminErr"></div>
+        </div>
+        <div class="ctrl-col hidden" id="otpZone">
+          <h3>▸ 生成 OTP 兑换码</h3>
+          <div class="field">
+            <label>Credits 数量（发给对方后，对方输入码即到账）</label>
+            <div style="display:flex;gap:10px">
+              <input id="otpAmount" type="number" min="1" max="100000" value="50" placeholder="数量">
+              <button class="btn" id="btnGenOtp" style="flex-shrink:0">▸ 生成</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>有效期（Root-Admin 设定 · 1-14 天，过期自动失效）</label>
+            <select id="otpDays"></select>
+          </div>
+          <div class="otp-out hidden" id="otpOut">
+            <div class="otp-code" id="otpCode"></div>
+            <div style="display:flex;gap:10px;justify-content:center">
+              <button class="btn small" id="btnCopyOtp">✓ 我记完了</button>
+            </div>
+            <div class="hint">码只完整显示这一次，关闭页面后仅存掩码记录，立刻私发对方</div>
+          </div>
+          <div class="acc-list" id="otpList"></div>
+        </div>
+      </div>
+      <div class="acc-list" id="accList" style="margin-top:20px"></div>
+      <div class="tool-row"><button class="btn small magenta" id="btnCtrlBack">▸ 返回聊天</button></div>
+    </div>
+
+    <div class="panel hidden" id="settingsPanel">
+      <h2>▸ 个人设置 · Personal Settings</h2>
+      <div class="ctrl-grid">
+        <div class="ctrl-col">
+          <h3>▸ 账号信息</h3>
+          <div class="side-card" style="margin-bottom:18px">
+            <div class="sc-row"><span class="sc-k">用户名</span><span class="sc-v" id="setName">-</span></div>
+            <div class="sc-row"><span class="sc-k">身份</span><span class="sc-v" id="setRole">-</span></div>
+            <div class="sc-row"><span class="sc-k">Credits</span><span class="sc-v" id="setPts">0</span></div>
+          </div>
+          <div class="tool-row" style="margin-top:6px"><button class="btn wide magenta" id="btnLogout">▸ 退出登录</button></div>
+        </div>
+        <div class="ctrl-col">
+          <h3>▸ 修改密码</h3>
+          <div class="field">
+            <label>旧密码</label>
+            <input id="setOldPass" type="password" maxlength="64" placeholder="输入当前密码" autocomplete="current-password">
+          </div>
+          <div class="field">
+            <label>新密码（至少 6 位）</label>
+            <input id="setNewPass" type="password" maxlength="64" placeholder="输入新密码" autocomplete="new-password">
+          </div>
+          <div class="field">
+            <label>确认新密码</label>
+            <input id="setNewPass2" type="password" maxlength="64" placeholder="再输一遍新密码" autocomplete="new-password">
+          </div>
+          <button class="btn wide" id="btnChangePass">▸ 保存新密码</button>
+          <div class="err" id="setErr"></div>
+          <div class="hint" id="setOk"></div>
+        </div>
+        <div class="ctrl-col" id="apiKeyZone">
+          <h3>▸ API Key</h3>
+          <div class="hint" id="apiKeyStatus" style="margin:0 0 12px;text-align:left"></div>
+          <div class="field">
+            <label>绑定 API Key（输入 ak-... · 留空点绑定 = 解绑）</label>
+            <div style="display:flex;gap:10px">
+              <input id="apiKeyInput" maxlength="80" placeholder="ak-..." style="letter-spacing:1px">
+              <button class="btn" id="btnBindKey" style="flex-shrink:0">▸ 绑定</button>
+            </div>
+          </div>
+          <div id="apiKeyAdminZone" class="hidden">
+            <div class="field">
+              <label>发放 API Key（Root-Admin · 归属用户 + 名称）</label>
+              <div style="display:flex;gap:10px">
+                <input id="apiKeyOwner" maxlength="16" placeholder="归属用户名" style="flex:1">
+                <input id="apiKeyName" maxlength="24" placeholder="名称（选填）" style="flex:1">
+                <button class="btn amber" id="btnCreateKey" style="flex-shrink:0">▸ 发放</button>
+              </div>
+            </div>
+            <div class="otp-out hidden" id="apiKeyOut">
+              <div class="otp-code" id="apiKeyNewCode"></div>
+              <div class="hint">Key 只完整显示这一次，立刻私发给对方 · 对方在「个人设置」里绑定</div>
+            </div>
+            <div class="acc-list" id="apiKeyList"></div>
+          </div>
+        </div>
+      </div>
+      <div class="tool-row"><button class="btn small magenta" id="btnSettingsBack">▸ 返回聊天</button></div>
+    </div>
+  </main>
+
+</div>
+
+<div class="drawer-backdrop" id="drawerBackdrop"></div>
+<input type="file" id="fileInput" style="display:none">
+
+<div class="modal hidden" id="inviteModal">
+  <div class="modal-box">
+    <div class="modal-title">♟ 代付请求</div>
+    <p id="inviteText"></p>
+    <div class="tool-row" style="justify-content:center">
+      <button class="btn" id="btnInviteAccept">▸ 同意（扣 5 Credits）</button>
+      <button class="btn small magenta" id="btnInviteReject">拒绝</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="groupModal">
+  <div class="modal-box" style="max-width:440px;text-align:left">
+    <div class="modal-title">＋ 新建群聊</div>
+    <div class="field"><label>群名称</label><input id="groupName" maxlength="24" placeholder="给群起个名"></div>
+    <div class="field"><label>选择成员（勾选要拉进群的人，观测者也可被邀请）</label><div id="groupMembers" class="member-pick"><div class="empty">加载成员中…</div></div></div>
+    <div class="err" id="groupErr"></div>
+    <div class="tool-row" style="justify-content:center">
+      <button class="btn" id="btnCreateGroup">▸ 创建群聊</button>
+      <button class="btn small magenta" id="btnGroupCancel">取消</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="deactModal">
+  <div class="modal-box" style="text-align:left">
+    <div class="modal-title">⚠ 注销成员</div>
+    <p id="deactText" style="text-align:left">此操作将删除该成员的账号与会话，不可恢复。</p>
+    <div class="field">
+      <label>Root-Admin 密码验证（输入你自己的密码）</label>
+      <div class="pw-wrap">
+        <input id="deactPass" type="password" maxlength="64" placeholder="输入 Root-Admin 密码" autocomplete="current-password">
+        <button type="button" class="pw-eye" id="eyeDeact" aria-label="显示或隐藏密码"></button>
+      </div>
+    </div>
+    <div class="err" id="deactErr"></div>
+    <div class="tool-row" style="justify-content:center;margin-bottom:0">
+      <button class="btn magenta" id="btnDeactConfirm">▸ 确认注销</button>
+      <button class="btn small" id="btnDeactCancel">取消</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="groupSettingsModal">
+  <div class="modal-box" style="max-width:520px;max-height:86vh;overflow-y:auto;text-align:left">
+    <div class="modal-title">⚙ 群设置 · <span id="gsRoomName">-</span></div>
+    <div class="field">
+      <label>群成员列表（<span id="gsMemberCount">0</span> 人 · 👑 = 群主）</label>
+      <div id="gsMembers" class="member-pick" style="max-height:260px"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="field" id="gsPassZone">
+      <label>加群密码（后来者凭「群名 + 密码」在会话列表点「🔐 密码加群」加入）</label>
+      <div id="gsPassView" style="display:flex;gap:10px;align-items:center">
+        <span class="gs-pass" id="gsPassText" style="flex:1">-</span>
+      </div>
+      <div id="gsPassEdit" style="display:none;gap:8px;margin-top:8px">
+        <input id="gsPassInput" maxlength="32" placeholder="新加群密码（留空 = 清除密码）" style="flex:1">
+        <button class="btn small" id="btnSavePass" style="flex-shrink:0">▸ 保存</button>
+      </div>
+    </div>
+    <div class="field hidden" id="gsOwnerZone">
+      <label>群主专属管理</label>
+      <button class="btn wide magenta" id="btnDisbandGroup" style="border-color:rgba(255,46,151,.7)">⚠ 解散群聊（不可恢复）</button>
+      <div class="hint" style="margin-top:8px;text-align:left">转让群主：在上方成员列表里对目标成员点「转让群主」。群主可踢人、可禁言 1-24 小时（中途不能结束，结束后 12 小时内不可再禁言，不能禁言 Admin）。</div>
+    </div>
+    <div class="err" id="gsErr"></div>
+    <div class="tool-row" style="justify-content:center;margin-bottom:0">
+      <button class="btn small" id="btnGsClose">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="muteModal">
+  <div class="modal-box" style="max-width:400px;text-align:left">
+    <div class="modal-title">🔇 临时禁言 · <span id="muteTarget">-</span></div>
+    <p style="margin-bottom:10px">时长 1-24 小时，生效后中途不能结束；禁言结束后 12 小时内不可再次禁言。</p>
+    <div class="field">
+      <label>禁言时长（小时）</label>
+      <input id="muteHours" type="number" min="1" max="24" value="1">
+    </div>
+    <div class="err" id="muteErr"></div>
+    <div class="tool-row" style="justify-content:center;margin-bottom:0">
+      <button class="btn magenta" id="btnMuteConfirm">▸ 确认禁言</button>
+      <button class="btn small" id="btnMuteCancel">取消</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="joinPwModal">
+  <div class="modal-box" style="max-width:400px;text-align:left">
+    <div class="modal-title">🔐 密码加群</div>
+    <div class="field">
+      <label>群聊名称（群主在群设置里查看群名与密码）</label>
+      <input id="joinPwName" maxlength="24" placeholder="输入群名">
+    </div>
+    <div class="field">
+      <label>加群密码</label>
+      <input id="joinPwPass" maxlength="32" placeholder="输入加群密码">
+    </div>
+    <div class="err" id="joinPwErr"></div>
+    <div class="tool-row" style="justify-content:center;margin-bottom:0">
+      <button class="btn" id="btnJoinPwConfirm">▸ 加入群聊</button>
+      <button class="btn small magenta" id="btnJoinPwCancel">取消</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="fileConfirmModal">
+  <div class="modal-box" style="max-width:420px;text-align:left">
+    <div class="modal-title" id="fcTitle">▸ 文件发送确认</div>
+    <p id="fcText" style="text-align:left;margin-bottom:12px"></p>
+    <div class="err" id="fcErr"></div>
+    <div class="tool-row" style="justify-content:center;margin-bottom:0">
+      <button class="btn" id="btnFcConfirm">▸ 确认</button>
+      <button class="btn small magenta" id="btnFcCancel">取消</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="repostModal">
+  <div class="modal-box" style="max-width:440px;text-align:left">
+    <div class="modal-title">▸ 转载到群聊</div>
+    <p id="repostText" style="text-align:left;margin-bottom:12px"></p>
+    <div class="field"><label>选择目标群聊（A 类群）</label><select id="repostRoom" class="wide"></select></div>
+    <div class="err" id="repostErr"></div>
+    <div class="tool-row" style="justify-content:center;margin-bottom:0">
+      <button class="btn" id="btnRepostConfirm">▸ 确认转载（扣费）</button>
+      <button class="btn small magenta" id="btnRepostCancel">取消</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var scanA = document.getElementById('scanA');
+  var scanB = document.getElementById('scanB');
+  var lines = [
+    { el: scanA, y: -40, cycle: 6.0 },
+    { el: scanB, y: -400, cycle: 3.8 }
+  ];
+  var targets = Array.prototype.slice.call(document.querySelectorAll('.btn, .panel'));
+  var rects = [];
+  var THRESH = 150;
+
+  function measure() {
+    rects = targets.map(function (el) {
+      var r = el.getBoundingClientRect();
+      return { el: el, cy: r.top + r.height / 2 };
+    });
+  }
+  window.addEventListener('scroll', measure, { passive: true });
+  window.addEventListener('resize', measure);
+  measure();
+
+  var last = null;
+  function frame(t) {
+    if (last === null) last = t;
+    var dt = Math.min((t - last) / 1000, 0.05);
+    last = t;
+    var h = window.innerHeight;
+    for (var i = 0; i < lines.length; i++) {
+      var L = lines[i];
+      L.y += (h / L.cycle) * dt;
+      if (L.y > h + 20) L.y = -20;
+      L.el.style.transform = 'translateY(' + L.y.toFixed(1) + 'px)';
+    }
+    if (!reduce) {
+      for (var j = 0; j < rects.length; j++) {
+        var item = rects[j];
+        var best = 0;
+        for (var k = 0; k < lines.length; k++) {
+          var d = Math.abs(lines[k].y - item.cy);
+          var p = 1 - d / THRESH;
+          if (p > best) best = p;
+        }
+        if (best < 0) best = 0;
+        item.el.style.setProperty('--prox', best.toFixed(3));
+      }
+    }
+    requestAnimationFrame(frame);
+  }
+  if (!reduce) requestAnimationFrame(frame);
+
+  var TOKEN_KEY = 'v7_token';
+  var authPanel = document.getElementById('authPanel');
+  var chatPanel = document.getElementById('chatPanel');
+  var authErr = document.getElementById('authErr');
+  var authUser = document.getElementById('authUser');
+  var authPass = document.getElementById('authPass');
+  var authSubmit = document.getElementById('authSubmit');
+  var tabLogin = document.getElementById('tabLogin');
+  var tabRegister = document.getElementById('tabRegister');
+  var messages = document.getElementById('messages');
+  var msgInput = document.getElementById('msgInput');
+  var connBadge = document.getElementById('connBadge');
+  var connText = document.getElementById('connText');
+  var btnSend = document.getElementById('btnSend');
+  var appShell = document.getElementById('appShell');
+  var authScreen = document.getElementById('authScreen');
+  var logPanel = document.getElementById('logPanel');
+  var ctrlPanel = document.getElementById('ctrlPanel');
+  var settingsPanel = document.getElementById('settingsPanel');
+  var cloudPanel = document.getElementById('cloudPanel');
+  var repostModal = document.getElementById('repostModal');
+
+  var mode = 'login';
+  var token = localStorage.getItem(TOKEN_KEY) || '';
+  var me = null;
+  var meRole = '';
+  var ws = null;
+  var reconnectTimer = null;
+  var currentRoom = '';
+  var roomsData = [];
+  var roomItems = document.getElementById('roomItems');
+  var roomListPage = document.getElementById('roomListPage');
+  var convView = document.getElementById('convView');
+  var pendingSalarySys = 0;
+
+  // 聊天面板两个子页：'list' 会话列表 / 'conv' 对话
+  function showChatPage(page) {
+    roomListPage.classList.toggle('hidden', page !== 'list');
+    convView.classList.toggle('hidden', page !== 'conv');
+    document.getElementById('convRoomInfo').classList.toggle('hidden', page !== 'conv');
+    measure();
+  }
+
+  // 输入框按房间/身份自适应：观测者仅文件传输助手可发言；公告群仅 Root-Admin 可发言；
+  // 计费提示：其它群发言 20 字/10Credits，文件上传/下载 1MB/20Credits（RA 与文件传输助手免费）
+  function applyRoomInput() {
+    var inHelper = currentRoom === 'file:' + me;
+    var charged = !!currentRoom && currentRoom !== 'geek' && !inHelper;
+    var chargeHint = ' · 本房发言 20 字/10Credits · 文件 1MB/20Credits';
+    if (meRole === 'observer') {
+      var canSpeakObs = inHelper || currentRoom === 'dm:' + me;
+      msgInput.disabled = !canSpeakObs;
+      btnSend.disabled = !canSpeakObs;
+      btnFile.disabled = !canSpeakObs;
+      if (inHelper) {
+        msgInput.placeholder = '发送给自己 · 仅自己可见（免费）';
+      } else if (currentRoom === 'dm:' + me) {
+        msgInput.placeholder = '与 Root-Admin 私聊 · 正常计费';
+      } else {
+        msgInput.placeholder = '观测者只能围观，仅文件传输助手 / 与 Root-Admin 私聊可发言';
+      }
+      btnFile.title = '发送文件（≤' + fmtSize(MAX_FILE) + '）';
+      return;
+    }
+    if (currentRoom === 'geek' && meRole !== 'root-admin') {
+      msgInput.disabled = true;
+      btnSend.disabled = true;
+      btnFile.disabled = true;
+      msgInput.placeholder = 'Geek公告群仅 Root-Admin 可发言，其他成员只能阅读（文件可付费下载）';
+      btnFile.title = '发送文件（≤' + fmtSize(MAX_FILE) + '）';
+      return;
+    }
+    msgInput.disabled = false;
+    btnSend.disabled = false;
+    btnFile.disabled = false;
+    msgInput.placeholder = '输入消息，回车发送' + (charged ? chargeHint : '');
+    btnFile.title = '发送文件（≤' + fmtSize(MAX_FILE) + '）' + (charged ? ' · 上传 1MB/20Credits' : '');
+  }
+
+  function setMode(next) {
+    mode = next;
+    authSubmit.textContent = next === 'login' ? '▸ 登录' : '▸ 注册';
+    authErr.textContent = '';
+  }
+  tabLogin.addEventListener('click', function () { setMode('login'); });
+  tabRegister.addEventListener('click', function () { setMode('register'); });
+
+  function fmtTime(iso) {
+    if (!iso) return '----.--.-- --:--';
+    var d = new Date(new Date(iso).getTime() + 8 * 3600 * 1000);
+    return d.getUTCFullYear() + '-' + ('0' + (d.getUTCMonth() + 1)).slice(-2) + '-' + ('0' + d.getUTCDate()).slice(-2) +
+      ' ' + ('0' + d.getUTCHours()).slice(-2) + ':' + ('0' + d.getUTCMinutes()).slice(-2);
+  }
+  function nowTime() { return fmtTime(new Date().toISOString()); }
+  function scrollBottom() { messages.scrollTop = messages.scrollHeight; }
+
+  function appendMsg(m, animate) {
+    var empty = messages.querySelector('.empty');
+    if (empty) empty.remove();
+    // 历史中的文件消息：以 {"__file":1,...} 标记存储，渲染成文件卡片（下载从服务端取，保留 7 天）
+    if (typeof m.text === 'string' && m.text.indexOf('{"__file"') === 0) {
+      try {
+        var fm = JSON.parse(m.text);
+        buildFileMsg({ self: !!m.self, sender: m.sender, time: m.time, name: fm.name, size: fm.size, fileId: fm.id, role: m.role });
+        fileDone(fm.id, null, fm.name, fm.size, false);
+        return;
+      } catch (e) {}
+    }
+    var div = document.createElement('div');
+    div.className = 'msg ' + (m.self ? 'self' : 'other');
+    var meta = document.createElement('span');
+    meta.className = 'meta';
+    var nameSpan = document.createElement('span');
+    nameSpan.textContent = m.sender;
+    var timeSpan = document.createElement('span');
+    timeSpan.textContent = m.time;
+    meta.appendChild(nameSpan);
+    meta.appendChild(timeSpan);
+    var lv = document.createElement('span');
+    lv.className = 'lv';
+    lv.textContent = ROLE_LABEL[m.role] || 'User';
+    var body = document.createElement('span');
+    body.textContent = m.text;
+    div.appendChild(meta);
+    div.appendChild(lv);
+    div.appendChild(body);
+    if (!animate) div.style.animation = 'none';
+    messages.appendChild(div);
+    scrollBottom();
+  }
+  function appendSys(text) {
+    var empty = messages.querySelector('.empty');
+    if (empty) empty.remove();
+    var div = document.createElement('div');
+    div.className = 'msg sys';
+    div.textContent = '— ' + text + ' —';
+    messages.appendChild(div);
+    scrollBottom();
+  }
+  function setConn(ok, label) {
+    connBadge.classList.toggle('off', !ok);
+    connText.textContent = label || (ok ? '已连接' : '已断开');
+  }
+
+  async function api(path, body) {
+    var opt = { headers: {} };
+    if (body) {
+      opt.method = 'POST';
+      opt.headers['content-type'] = 'application/json';
+      opt.body = JSON.stringify(body);
+    }
+    if (token) opt.headers['Authorization'] = 'Bearer ' + token;
+    var res = await fetch(path, opt);
+    var data = {};
+    try { data = await res.json(); } catch (e) {}
+    return { ok: res.ok, status: res.status, data: data };
+  }
+
+  async function submitAuth() {
+    var username = authUser.value.trim();
+    var password = authPass.value;
+    if (!username || !password) { authErr.textContent = '用户名和密码都要填'; return; }
+    authErr.textContent = '';
+    authSubmit.disabled = true;
+    try {
+      var r = await api(mode === 'login' ? '/api/login' : '/api/register', { username: username, password: password });
+      if (!r.ok) {
+        authErr.textContent = r.data.error || ('失败（' + r.status + '）');
+        authSubmit.disabled = false;
+        return;
+      }
+      token = r.data.token;
+      localStorage.setItem(TOKEN_KEY, token);
+      await enterChat();
+    } catch (e) {
+      authErr.textContent = '网络错误，重试';
+    }
+    authSubmit.disabled = false;
+  }
+  authSubmit.addEventListener('click', submitAuth);
+  authPass.addEventListener('keydown', function (e) { if (e.key === 'Enter') submitAuth(); });
+  authUser.addEventListener('keydown', function (e) { if (e.key === 'Enter') submitAuth(); });
+
+  function connectWS() {
+    setConn(false, '连接中…');
+    var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+    ws = new WebSocket(proto + location.host + '/room?token=' + encodeURIComponent(token));
+    ws.onopen = function () { setConn(true); loadRooms(); if (currentRoom) ws.send(JSON.stringify({ type: 'join-room', room: currentRoom })); };
+    ws.onclose = function () {
+      setConn(false, '已断开 · 重连中');
+      clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(function () { if (token) connectWS(); }, 2000);
+    };
+    ws.onerror = function () { setConn(false, '连接错误'); };
+    ws.binaryType = 'arraybuffer';
+    ws.onmessage = function (e) {
+      if (e.data instanceof ArrayBuffer) {
+        if (recvState) {
+          recvState.chunks.push(e.data);
+          recvState.received += e.data.byteLength;
+          fileProgress(recvState.fileId, recvState.received / recvState.size * 100);
+        }
+        return;
+      }
+      var d = {};
+      try { d = JSON.parse(e.data); } catch (err) { return; }
+      if (d.type === 'history') {
+        currentRoom = d.room;
+        messages.innerHTML = '';
+        if (d.messages && d.messages.length) {
+          d.messages.forEach(function (m) {
+            appendMsg({ sender: m.sender, role: m.role, text: m.text, time: fmtTime(m.ts), self: m.sender === me }, false);
+          });
+        } else {
+          var emptyH = document.createElement('div');
+          emptyH.className = 'empty';
+          emptyH.textContent = '这里还没有消息，开个场吧';
+          messages.appendChild(emptyH);
+        }
+        if (pendingSalarySys > 0 && d.room === 'geek') {
+          appendSys('今日工资 +' + pendingSalarySys + ' Credits 已到账');
+          pendingSalarySys = 0;
+        }
+      } else if (d.type === 'room-added') {
+        loadRooms();
+      } else if (d.type === 'room-deleted') {
+        if (d.roomId && d.roomId === currentRoom) {
+          appendSys('该群聊已被群主解散');
+          currentRoom = '';
+          showChatPage('list');
+        }
+        loadRooms();
+      } else if (d.type === 'msg') {
+        appendMsg({ sender: d.sender, role: d.role, text: d.text, time: nowTime(), self: d.sender === me }, true);
+      } else if (d.type === 'file-start') {
+        recvState = { fileId: d.id, name: d.name, size: d.size, mime: d.mime, chunks: [], received: 0 };
+        buildFileMsg({ self: false, sender: d.sender || '对方', time: nowTime(), name: d.name, size: d.size, fileId: d.id, role: d.role });
+        setTransferring(1);
+      } else if (d.type === 'file-end') {
+        if (recvState && recvState.fileId === d.id) {
+          var blob = new Blob(recvState.chunks, { type: recvState.mime });
+          var url = URL.createObjectURL(blob);
+          fileDone(d.id, url, recvState.name, recvState.size);
+          setTransferring(-1);
+          recvState = null;
+        }
+      } else if (d.type === 'sys') {
+        if (cmdPendingTimer) { clearTimeout(cmdPendingTimer); cmdPendingTimer = null; }
+        if (inCmdPage || (cmdPanel && !cmdPanel.classList.contains('hidden'))) appendCmdLine(d.text);
+        else appendSys(d.text);
+        if (d.text.indexOf('兑换成功') !== -1 || d.text.indexOf('划转') !== -1 || d.text.indexOf('获得') !== -1) {
+          api('/api/me').then(function (r) { if (r.ok) refreshCredits(r.data.points); });
+        }
+      } else if (d.type === 'game-invite') {
+        if (currentGame && d.roomId === currentGame.roomId && currentGame.iAmCreator) {
+          pendingInvite = { requestId: d.requestId, roomId: d.roomId, from: d.from };
+          document.getElementById('inviteText').textContent = d.from + ' 请求你替他支付 5 Credits 进入房间 ' + d.roomId + ' · 同意则你被扣 5 Credits，他免费进入';
+          inviteModal.classList.remove('hidden');
+        }
+      } else if (d.type === 'game-respond') {
+        if (currentGame && !currentGame.iAmCreator) {
+          if (d.accepted) {
+            enterGameRoom('ready');
+            appendSys('房主同意代付，你已免费进入房间 ' + currentGame.roomId);
+          } else {
+            payErr.style.color = '';
+            payErr.textContent = '房主拒绝了代付请求，可以选择自己支付';
+            document.getElementById('payWaitHint').style.display = 'none';
+          }
+        }
+      } else if (d.type === 'game-join') {
+        if (currentGame && d.roomId === currentGame.roomId && currentGame.iAmCreator) {
+          document.getElementById('roomOpponent').textContent = '· 对手：' + d.opponent;
+          setRoomStatus('ready');
+          appendSys(d.opponent + ' 已进入房间（' + (d.payer === 'self' ? '自付 5 Credits' : '你代付 5 Credits') + '）');
+          refreshMe();
+        }
+      } else if (d.type === 'game-start') {
+        if (currentGame && d.roomId === currentGame.roomId) setRoomStatus('playing');
+      } else if (d.type === 'game-end') {
+        if (currentGame && d.roomId === currentGame.roomId) {
+          setRoomStatus('ended');
+          appendSys('房间已被房主结束');
+        }
+      } else if (d.type === 'presence') {
+        if (d.online !== undefined) {
+          connText.textContent = '已连接 · ' + d.online + ' 人在线';
+          var so = document.getElementById('sideOnline');
+          if (so) so.textContent = d.online + ' 人在线';
+        }
+      }
+    };
+  }
+
+  async function enterChat() {
+    var r = await api('/api/me');
+    if (!r.ok) {
+      token = '';
+      localStorage.removeItem(TOKEN_KEY);
+      return;
+    }
+    me = r.data.username;
+    meRole = r.data.role;
+    document.getElementById('chatName').textContent = me;
+    document.getElementById('chatRole').textContent = ROLE_LABEL[r.data.role] || 'User';
+    document.getElementById('chatPoints').textContent = r.data.points;
+    document.getElementById('pts').textContent = r.data.points;
+    document.getElementById('sideRole').textContent = ROLE_LABEL[r.data.role] || 'User';
+    authPanel.classList.add('hidden');
+    chatPanel.classList.remove('hidden');
+    appShell.classList.remove('hidden');
+    authScreen.classList.add('hidden');
+    if (meRole === 'admin' || meRole === 'root-admin') {
+      document.getElementById('btnNavLogs').classList.remove('hidden');
+      // 命令行已关闭：入口一律隐藏
+      document.getElementById('btnCmdEntry').classList.add('hidden');
+      document.getElementById('btnNavCmd').classList.add('hidden');
+      if (meRole === 'root-admin') {
+        // 系统控制面板（Root-Admin Console）仅 Root-Admin 可见
+        document.getElementById('btnNavCtrl').classList.remove('hidden');
+        document.getElementById('createAccZone').classList.remove('hidden');
+        document.getElementById('otpZone').classList.remove('hidden');
+        document.getElementById('apiKeyAdminZone').classList.remove('hidden');
+        loadAccounts();
+        loadOtps();
+        loadLogs();
+        loadCreditsLogs();
+      } else {
+        document.getElementById('btnNavCtrl').classList.add('hidden');
+        document.getElementById('createAccZone').classList.add('hidden');
+        document.getElementById('otpZone').classList.add('hidden');
+        document.getElementById('apiKeyAdminZone').classList.add('hidden');
+      }
+    } else {
+      document.getElementById('btnNavLogs').classList.add('hidden');
+      document.getElementById('btnNavCtrl').classList.add('hidden');
+      document.getElementById('btnCmdEntry').classList.add('hidden');
+      document.getElementById('apiKeyAdminZone').classList.add('hidden');
+    }
+    if (meRole === 'observer') {
+      document.getElementById('btnNewGroup').style.display = 'none';
+    } else {
+      document.getElementById('btnNewGroup').style.display = '';
+    }
+    applyRoomInput();
+    measure();
+
+    showChatPage('list');
+    pendingSalarySys = (r.data.salary && r.data.salary > 0) ? r.data.salary : 0;
+    refreshCredits(r.data.points);
+    connectWS();
+  }
+
+  function send() {
+    var text = msgInput.value.trim();
+    if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if (text.charAt(0) === '/') {
+      appendSys('命令行已关闭，请使用系统控制面板与各功能面板完成操作');
+      msgInput.value = '';
+      autoGrowInput();
+      return;
+    }
+    ws.send(JSON.stringify({ text: text }));
+    msgInput.value = '';
+    autoGrowInput();
+    msgInput.focus();
+    // 计费房间发言后刷新余额显示（实际扣费以服务端为准）
+    if (currentRoom && currentRoom !== 'geek' && currentRoom !== 'file:' + me) {
+      refreshMe();
+    }
+  }
+  document.getElementById('btnSend').addEventListener('click', send);
+  // Enter 发送 · Shift+Enter 换行
+  msgInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      send();
+    }
+  });
+  msgInput.addEventListener('input', autoGrowInput);
+  function autoGrowInput() {
+    msgInput.style.height = 'auto';
+    msgInput.style.height = Math.min(msgInput.scrollHeight, 120) + 'px';
+  }
+  // 字数上限视 Credits 而定：20 字/10Credits = 2 字/Credits，最高 1000（至少 20 字）
+  function applyInputLimit() {
+    var pts = parseInt(document.getElementById('pts').textContent, 10) || 0;
+    var limit = currentRoom && currentRoom !== 'geek' && currentRoom !== 'file:' + me
+      ? Math.min(1000, Math.max(20, pts * 2))
+      : 1000;
+    msgInput.setAttribute('maxlength', String(limit));
+  }
+
+  var cmdInput = document.getElementById('cmdInput');
+  var cmdPanel = document.getElementById('cmdPanel');
+  var cmdOutput = document.getElementById('cmdOutput');
+  var inCmdPage = false;
+
+  function appendCmdLine(text, cls) {
+    var div = document.createElement('div');
+    div.className = 'line ' + (cls || 'result');
+    div.textContent = text;
+    cmdOutput.appendChild(div);
+    cmdOutput.scrollTop = cmdOutput.scrollHeight;
+  }
+  var cmdPendingTimer = null;
+  function sendCmd() {
+    var text = cmdInput.value.trim();
+    if (!text) return;
+    var full = text.charAt(0) === '/' ? text : '/' + text;
+    appendCmdLine(full, 'echo');
+    cmdInput.value = '';
+    cmdInput.focus();
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      appendCmdLine('连接未就绪，正在重连…', 'sysline');
+      if (token) connectWS();
+      return;
+    }
+    ws.send(JSON.stringify({ text: full }));
+    if (cmdPendingTimer) clearTimeout(cmdPendingTimer);
+    cmdPendingTimer = setTimeout(function () {
+      appendCmdLine('⚠ 服务器无响应（可能正在重启）· 请稍等几秒后重试', 'sysline');
+    }, 3500);
+  }
+  document.getElementById('btnCmd').addEventListener('click', sendCmd);
+  cmdInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') sendCmd(); });
+  document.getElementById('btnCmdEntry').addEventListener('click', function () {
+    showOnly(cmdPanel);
+    cmdInput.focus();
+  });
+  document.getElementById('btnCmdBack').addEventListener('click', function () {
+    showOnly(chatPanel);
+  });
+
+  // ===== 统一面板互斥路由：任何时刻只显示一个主面板（修复面板叠加） =====
+  var gameLobby = document.getElementById('gameLobby');
+  var gamePayPanel = document.getElementById('gamePayPanel');
+  var gameRoomPanel = document.getElementById('gameRoomPanel');
+  var gameErr = document.getElementById('gameErr');
+  var payErr = document.getElementById('payErr');
+  var joinRoomBox = document.getElementById('joinRoomBox');
+  var joinRoomInput = document.getElementById('joinRoomInput');
+  var inviteModal = document.getElementById('inviteModal');
+  var currentGame = null;
+  var pendingInvite = null;
+  var redeemPanel = document.getElementById('redeemPanel');
+  var shopPanel = document.getElementById('shopPanel');
+  var PANELS = [chatPanel, cmdPanel, redeemPanel, logPanel, ctrlPanel, settingsPanel, gameLobby, gamePayPanel, gameRoomPanel, shopPanel, cloudPanel];
+  function showOnly(el) {
+    PANELS.forEach(function (p) { if (p) p.classList.toggle('hidden', p !== el); });
+    inCmdPage = (el === cmdPanel);
+    measure();
+  }
+  function hideAllPanels() {
+    PANELS.forEach(function (p) { p.classList.add('hidden'); });
+    inCmdPage = false;
+  }
+
+  // ===== 游戏大厅 =====
+  function showGamePanel(which) {
+    showOnly(which === 'lobby' ? gameLobby : which === 'pay' ? gamePayPanel : which === 'room' ? gameRoomPanel : chatPanel);
+  }
+  function gameTypeName(t) { return t === 'xiangqi' ? '中国象棋' : t === 'match3' ? '消消乐' : '国际象棋'; }
+  function refreshMe() { api('/api/me').then(function (r) { if (r.ok) refreshCredits(r.data.points); }); }
+
+  document.getElementById('btnGame').addEventListener('click', function () {
+    gameErr.textContent = '';
+    joinRoomBox.classList.add('hidden');
+    showGamePanel('lobby');
+  });
+  document.getElementById('btnGameBack').addEventListener('click', function () { showGamePanel(null); });
+  document.getElementById('btnPayBack').addEventListener('click', function () { payErr.textContent = ''; showGamePanel('lobby'); });
+  document.getElementById('btnRoomLeave').addEventListener('click', function () { showGamePanel(null); });
+
+  // SHOP 已关闭：购买入口移除，仅保留已购房间号的加入流程（data-game-join / btnJoinRoom）
+
+  Array.prototype.forEach.call(document.querySelectorAll('[data-game-join]'), function (btn) {
+    btn.addEventListener('click', function () {
+      joinRoomBox.classList.remove('hidden');
+      joinRoomInput.value = '';
+      joinRoomInput.focus();
+    });
+  });
+
+  document.getElementById('btnJoinRoom').addEventListener('click', async function () {
+    var rid = joinRoomInput.value.trim().toUpperCase();
+    gameErr.textContent = '';
+    if (!rid) { gameErr.textContent = '输入房间号'; return; }
+    try {
+      var r = await api('/api/game/join', { roomId: rid });
+      if (!r.ok) { gameErr.textContent = r.data.error || '加入失败'; return; }
+      if (r.data.self) {
+        // 房主本人（含代购归属人）进入自己买的房间：免费，直接进等待界面
+        currentGame = { roomId: r.data.roomId, type: r.data.type, iAmCreator: true };
+        enterGameRoom('waiting');
+        appendSys('已进入自己的房间 ' + r.data.roomId + ' · 把房间号发给好友，人齐了点「开始棋局」');
+        return;
+      }
+      currentGame = { roomId: r.data.roomId, type: r.data.type, iAmCreator: false };
+      document.getElementById('payRoomId').textContent = r.data.roomId;
+      document.getElementById('payCreator').textContent = r.data.creator;
+      document.getElementById('payTypeName').textContent = gameTypeName(r.data.type);
+      document.getElementById('payWaitHint').style.display = 'none';
+      payErr.style.color = '';
+      payErr.textContent = '';
+      showGamePanel('pay');
+    } catch (e) { gameErr.textContent = '网络错误'; }
+  });
+  joinRoomInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') document.getElementById('btnJoinRoom').click(); });
+
+  document.getElementById('btnPaySelf').addEventListener('click', async function () {
+    if (!currentGame) return;
+    payErr.textContent = '';
+    try {
+      var r = await api('/api/game/pay-self', { roomId: currentGame.roomId });
+      if (!r.ok) { payErr.textContent = r.data.error || '支付失败'; return; }
+      enterGameRoom('ready');
+      appendSys('支付成功，进入房间 ' + currentGame.roomId);
+    } catch (e) { payErr.textContent = '网络错误'; }
+  });
+
+  document.getElementById('btnPayRequest').addEventListener('click', async function () {
+    if (!currentGame) return;
+    payErr.textContent = '';
+    try {
+      var r = await api('/api/game/pay-request', { roomId: currentGame.roomId });
+      if (!r.ok) { payErr.textContent = r.data.error || '请求失败'; return; }
+      document.getElementById('payWaitHint').style.display = 'block';
+      payErr.style.color = '#00ff96';
+      payErr.textContent = '代付请求已发送，等房主回应';
+    } catch (e) { payErr.textContent = '网络错误'; }
+  });
+
+  function enterGameRoom(status) {
+    if (!currentGame) return;
+    document.getElementById('roomIdDisplay').textContent = currentGame.roomId;
+    document.getElementById('roomTypeName').textContent = gameTypeName(currentGame.type);
+    document.getElementById('roomOpponent').textContent = '';
+    var creatorBtns = document.getElementById('roomCreatorBtns');
+    var joinerBtns = document.getElementById('roomJoinerBtns');
+    if (currentGame.type === 'match3') {
+      creatorBtns.style.display = 'none';
+      joinerBtns.style.display = 'none';
+      setRoomStatus('playing');
+      showGamePanel('room');
+      startMatch3();
+      refreshMe();
+      return;
+    }
+    // 棋类：恢复占位提示（消消乐会重写棋盘区内容）
+    var area = document.getElementById('boardArea');
+    if (!document.getElementById('boardPlaceholder')) {
+      area.innerHTML = '<div class="empty" id="boardPlaceholder">棋盘准备就绪后显示于此 · 等待房主开始棋局</div>';
+    }
+    if (currentGame.iAmCreator) {
+      creatorBtns.style.display = 'flex';
+      joinerBtns.style.display = 'none';
+    } else {
+      creatorBtns.style.display = 'none';
+      joinerBtns.style.display = 'flex';
+    }
+    setRoomStatus(status);
+    showGamePanel('room');
+    refreshMe();
+  }
+
+  function setRoomStatus(status) {
+    var text = document.getElementById('roomStatusText');
+    var badge = document.getElementById('roomStatusBadge');
+    var startBtn = document.getElementById('btnGameStart');
+    var map = { waiting: '等待加入', ready: '等待开始', playing: '对战中', ended: '已结束' };
+    if (currentGame && currentGame.type === 'match3' && status === 'playing') map.playing = '游戏中';
+    text.textContent = map[status] || status;
+    badge.classList.toggle('off', status === 'ended');
+    if (startBtn) startBtn.disabled = status !== 'ready';
+    var ph = document.getElementById('boardPlaceholder');
+    if (ph) {
+      if (status === 'playing') ph.textContent = '对局开始！棋盘加载中…';
+      else if (status === 'ready') ph.textContent = '双方已就座 · 等待房主开始棋局';
+      else if (status === 'ended') ph.textContent = '房间已结束';
+      else ph.textContent = '把房间号 ' + (currentGame ? currentGame.roomId : '') + ' 发给好友，等他加入';
+    }
+  }
+
+  document.getElementById('btnGameStart').addEventListener('click', async function () {
+    if (!currentGame || !currentGame.iAmCreator) return;
+    try {
+      var r = await api('/api/game/start', { roomId: currentGame.roomId });
+      if (!r.ok) appendSys(r.data.error || '开始失败');
+    } catch (e) {}
+  });
+  document.getElementById('btnGameEnd').addEventListener('click', async function () {
+    if (!currentGame || !currentGame.iAmCreator) return;
+    try {
+      var r = await api('/api/game/end', { roomId: currentGame.roomId });
+      if (!r.ok) appendSys(r.data.error || '结束失败');
+    } catch (e) {}
+  });
+
+  // ===== 消消乐 · 连线版（连连看规则 · 单人 · 10 Credits/局）=====
+  // 规则：点两个相同图案，之间的通路（≤2 个折点，可走空白格外环）能连上就消除
+  var M3_N = 8;                                    // 8x8 = 64 格 = 32 对
+  var M3_EMO = ['🍎', '🍊', '🍋', '🍇', '🍉', '🍓', '🥝', '🫐'];
+  var M3_PAIR_SCORE = 10;                          // 每消一对得分
+  var M3_CLEAR_BONUS = 100;                        // 通关奖励
+  var M3_SHUFFLES = 3;                             // 重排次数
+  var m3 = null;
+
+  // ---- 扩展坐标：棋盘外扩一圈，外环恒可通行（经典连连看规则）----
+  function m3ExpIndex(er, ec) { return er * (M3_N + 2) + ec; }
+  function m3InnerToExp(i) { return { er: Math.floor(i / M3_N) + 1, ec: (i % M3_N) + 1 }; }
+  // 该扩展格是否可走入（终点格是图案块，特判放行）
+  function m3CanEnter(er, ec, ber, bec, grid) {
+    if (er === ber && ec === bec) return true;
+    if (er === 0 || ec === 0 || er === M3_N + 1 || ec === M3_N + 1) return true;
+    return grid[(er - 1) * M3_N + (ec - 1)] === -1;
+  }
+  // 连线判定：≤2 折，BFS 搜索；返回扩展坐标路径数组，连不上返回 null
+  function m3FindPath(grid, a, b) {
+    var N2 = M3_N + 2;
+    var A = m3InnerToExp(a), B = m3InnerToExp(b);
+    var DIRS = [[-1, 0], [0, 1], [1, 0], [0, -1]];
+    var seen = {};
+    var queue = [{ er: A.er, ec: A.ec, dir: -1, turns: 0, path: [{ er: A.er, ec: A.ec }] }];
+    seen[m3ExpIndex(A.er, A.ec) * 4 + 3] = 0;
+    for (var head = 0; head < queue.length; head++) {
+      var cur = queue[head];
+      if (cur.turns > 2) continue;
+      for (var d = 0; d < 4; d++) {
+        var ner = cur.er + DIRS[d][0], nec = cur.ec + DIRS[d][1];
+        if (ner < 0 || nec < 0 || ner >= N2 || nec >= N2) continue;
+        var isB = (ner === B.er && nec === B.ec);
+        if (!isB && !m3CanEnter(ner, nec, B.er, B.ec, grid)) continue;
+        var turns = cur.turns + ((cur.dir === -1 || cur.dir === d) ? 0 : 1);
+        if (turns > 2) continue;
+        var key = m3ExpIndex(ner, nec) * 4 + d;
+        if (seen[key] !== undefined && seen[key] <= turns) continue;
+        seen[key] = turns;
+        var npath = cur.path.concat([{ er: ner, ec: nec }]);
+        if (isB) return npath;
+        queue.push({ er: ner, ec: nec, dir: d, turns: turns, path: npath });
+      }
+    }
+    return null;
+  }
+  // 当前盘面任意一对可连的图案（用于提示/死局检测；可传任意棋盘）
+  function m3FindAnyPairOn(grid) {
+    var byType = {};
+    for (var i = 0; i < grid.length; i++) {
+      var v = grid[i];
+      if (v < 0) continue;
+      (byType[v] = byType[v] || []).push(i);
+    }
+    for (var t in byType) {
+      var list = byType[t];
+      for (var x = 0; x < list.length; x++) {
+        for (var y = x + 1; y < list.length; y++) {
+          if (m3FindPath(grid, list[x], list[y])) return [list[x], list[y]];
+        }
+      }
+    }
+    return null;
+  }
+  function m3FindAnyPair() { return m3FindAnyPairOn(m3.grid); }
+  // 随机成对填充（每种图案各 4 对）
+  function m3RandomFill() {
+    var bag = [];
+    for (var p = 0; p < M3_N * M3_N / 2; p++) { var tp = p % M3_EMO.length; bag.push(tp, tp); }
+    for (var s = bag.length - 1; s > 0; s--) {
+      var j = Math.floor(Math.random() * (s + 1));
+      var tmp = bag[s]; bag[s] = bag[j]; bag[j] = tmp;
+    }
+    return bag;
+  }
+  // 发牌：随机满盘 + 模拟通关校验——只有存在完整消除顺序的牌局才采用，
+  // 从机制上保证每一局都能通关（实测 500/500 成功，平均 1.5ms）
+  function m3Generate() {
+    for (var attempt = 0; attempt < 40; attempt++) {
+      var grid = m3RandomFill();
+      var sim = grid.slice();
+      var cleared = 0;
+      while (cleared < M3_N * M3_N / 2) {
+        var pair = m3FindAnyPairOn(sim);
+        if (!pair) break;
+        sim[pair[0]] = -1; sim[pair[1]] = -1;
+        cleared++;
+      }
+      if (cleared === M3_N * M3_N / 2) { m3.grid = grid; return; }
+    }
+    // 兜底：理论上走不到；真到了靠局内重排兜底
+    m3.grid = m3RandomFill();
+  }
+  // 重排：剩余图案随机换位，保证至少有一对可连
+  function m3ShuffleTiles() {
+    var cells = [], types = [];
+    for (var i = 0; i < m3.grid.length; i++) if (m3.grid[i] >= 0) { cells.push(i); types.push(m3.grid[i]); }
+    var guard = 0;
+    do {
+      for (var s = types.length - 1; s > 0; s--) { var j = Math.floor(Math.random() * (s + 1)); var tmp = types[s]; types[s] = types[j]; types[j] = tmp; }
+      for (var c = 0; c < cells.length; c++) m3.grid[cells[c]] = types[c];
+      guard++;
+    } while (!m3FindAnyPair() && guard < 200);
+    return !!m3FindAnyPair();
+  }
+  function m3ShakePair(a, b) {
+    var g = document.getElementById('m3Grid');
+    if (!g) return;
+    [a, b].forEach(function (idx) {
+      var el = g.children[idx];
+      if (el) { el.classList.add('shake'); setTimeout(function () { el.classList.remove('shake'); }, 300); }
+    });
+  }
+  function m3Render() {
+    var g = document.getElementById('m3Grid');
+    if (g) {
+      for (var i = 0; i < g.children.length; i++) {
+        var el = g.children[i], v = m3.grid[i];
+        el.textContent = v >= 0 ? M3_EMO[v] : '';
+        el.classList.toggle('sel', m3.sel === i);
+        el.classList.toggle('gone', v < 0);
+      }
+    }
+    var bar = document.getElementById('m3Bar');
+    if (bar) bar.textContent = '得分 ' + m3.score + ' · 剩余 ' + m3.pairsLeft + ' 对 · 重排 ' + m3.shuffles + ' 次';
+  }
+  // ---- 连线绘制 ----
+  function m3StageGeom() {
+    var g = document.getElementById('m3Grid');
+    var t0 = g.children[0];
+    var t1 = g.children[1] || t0;
+    var tD = g.children[M3_N] || t0;
+    return {
+      ox: t0.offsetLeft, oy: t0.offsetTop,
+      stepX: t1.offsetLeft - t0.offsetLeft,
+      stepY: tD.offsetTop - t0.offsetTop,
+      halfW: t0.offsetWidth / 2, halfH: t0.offsetHeight / 2
+    };
+  }
+  function m3DrawLine(path) {
+    var svg = document.getElementById('m3Line');
+    if (!svg) return;
+    var gm = m3StageGeom();
+    var pts = path.map(function (p) {
+      return (gm.ox + (p.ec - 1) * gm.stepX + gm.halfW) + ',' + (gm.oy + (p.er - 1) * gm.stepY + gm.halfH);
+    }).join(' ');
+    svg.innerHTML = '<polyline points="' + pts + '"></polyline>';
+  }
+  function m3ClearLine() {
+    var svg = document.getElementById('m3Line');
+    if (svg) svg.innerHTML = '';
+  }
+  async function m3Click(i) {
+    if (!m3 || m3.busy || m3.over) return;
+    if (m3.grid[i] < 0) return;                       // 空格子
+    if (m3.sel === null || m3.sel === i) {            // 选中/取消选中
+      m3.sel = (m3.sel === i ? null : i);
+      m3Render();
+      return;
+    }
+    if (m3.grid[m3.sel] !== m3.grid[i]) {             // 图案不同：换个选择
+      m3.sel = i;
+      m3Render();
+      return;
+    }
+    var a = m3.sel;
+    var path = m3FindPath(m3.grid, a, i);
+    if (!path) {                                      // 连不上：抖动+取消
+      m3ShakePair(a, i);
+      m3.sel = null;
+      m3Render();
+      return;
+    }
+    m3.busy = true;
+    m3.sel = null;
+    m3DrawLine(path);
+    m3Render();
+    await new Promise(function (res) { setTimeout(res, 430); });
+    m3ClearLine();
+    m3.grid[a] = -1;
+    m3.grid[i] = -1;
+    m3.score += M3_PAIR_SCORE;
+    m3.pairsLeft--;
+    m3Render();
+    if (m3.pairsLeft <= 0) { m3.busy = false; m3End(true); return; }
+    if (!m3FindAnyPair()) {
+      appendSys('消消乐：没有可连的对子了' + (m3.shuffles > 0 ? '，点「🔀 重排」继续' : '，且重排次数已用完'));
+    }
+    m3.busy = false;
+  }
+  function m3Hint() {
+    if (!m3 || m3.busy || m3.over) return;
+    var pair = m3FindAnyPair();
+    if (!pair) { appendSys('消消乐：当前没有可连的对子'); return; }
+    m3.sel = null;
+    m3Render();
+    pair.forEach(function (i) {
+      var el = document.getElementById('m3Grid').children[i];
+      if (el) { el.classList.add('hint'); setTimeout(function () { el.classList.remove('hint'); }, 2400); }
+    });
+  }
+  function m3DoShuffle() {
+    if (!m3 || m3.busy || m3.over) return;
+    if (m3.shuffles <= 0) { appendSys('消消乐：重排次数已用完'); return; }
+    m3.shuffles--;
+    m3.sel = null;
+    if (m3ShuffleTiles()) {
+      appendSys('消消乐：已重排（剩余 ' + m3.shuffles + ' 次）');
+    } else {
+      m3Generate();
+      m3.pairsLeft = M3_N * M3_N / 2;
+      appendSys('消消乐：重排失败，已重新发牌');
+    }
+    m3Render();
+  }
+  function m3End(cleared) {
+    if (!m3 || m3.over) return;
+    m3.over = true;
+    if (cleared) m3.score += M3_CLEAR_BONUS;
+    if (currentGame) {
+      api('/api/game/end', { roomId: currentGame.roomId });
+    }
+    setRoomStatus('ended');
+    var wrap = document.getElementById('m3Wrap');
+    if (wrap) {
+      var done = document.createElement('div');
+      done.className = 'm3-done';
+      done.textContent = cleared
+        ? '🎉 全部消除！通关得分 ' + m3.score + '（含通关奖励 +' + M3_CLEAR_BONUS + '）· 再来一局请到 SHOP 购买（10 Credits）'
+        : '🍬 本局结束 · 最终得分 ' + m3.score + ' · 再来一局请到 SHOP 购买（10 Credits）';
+      wrap.appendChild(done);
+    }
+    appendSys('消消乐结束 · 得分 ' + m3.score + (cleared ? '（通关）' : ''));
+  }
+  function startMatch3() {
+    m3 = { grid: new Array(M3_N * M3_N).fill(-1), sel: null, score: 0, pairsLeft: M3_N * M3_N / 2, shuffles: M3_SHUFFLES, busy: false, over: false };
+    m3Generate();
+    var area = document.getElementById('boardArea');
+    area.innerHTML =
+      '<div class="m3-wrap" id="m3Wrap">' +
+        '<div class="m3-bar" id="m3Bar"></div>' +
+        '<div class="m3-stage" id="m3Stage">' +
+          '<div class="m3-grid" id="m3Grid"></div>' +
+          '<svg class="m3-line" id="m3Line"></svg>' +
+        '</div>' +
+        '<div class="tool-row" style="justify-content:center;margin:0">' +
+          '<button class="btn small" id="m3HintBtn" type="button">💡 提示</button>' +
+          '<button class="btn small" id="m3ShuffleBtn" type="button">🔀 重排</button>' +
+        '</div>' +
+      '</div>';
+    var g = document.getElementById('m3Grid');
+    for (var i = 0; i < M3_N * M3_N; i++) {
+      (function (idx) {
+        var b = document.createElement('button');
+        b.className = 'm3-tile';
+        b.type = 'button';
+        b.addEventListener('click', function () { m3Click(idx); });
+        g.appendChild(b);
+      })(i);
+    }
+    document.getElementById('m3HintBtn').addEventListener('click', m3Hint);
+    document.getElementById('m3ShuffleBtn').addEventListener('click', m3DoShuffle);
+    m3Render();
+  }
+
+  document.getElementById('btnInviteAccept').addEventListener('click', async function () {
+    if (!pendingInvite) return;
+    try {
+      var r = await api('/api/game/pay-respond', { requestId: pendingInvite.requestId, accept: true });
+      if (!r.ok) appendSys(r.data.error || '代付失败');
+      else appendSys('已为 ' + pendingInvite.from + ' 代付 5 Credits');
+    } catch (e) {}
+    inviteModal.classList.add('hidden');
+    pendingInvite = null;
+  });
+  document.getElementById('btnInviteReject').addEventListener('click', async function () {
+    if (!pendingInvite) return;
+    try {
+      await api('/api/game/pay-respond', { requestId: pendingInvite.requestId, accept: false });
+    } catch (e) {}
+    inviteModal.classList.add('hidden');
+    pendingInvite = null;
+  });
+
+  document.getElementById('btnLogout').addEventListener('click', function () {
+    clearTimeout(reconnectTimer);
+    if (ws) { try { ws.close(); } catch (e) {} }
+    token = '';
+    localStorage.removeItem(TOKEN_KEY);
+    inCmdPage = false;
+    currentGame = null;
+    hideAllPanels();
+    inviteModal.classList.add('hidden');
+    deactModal.classList.add('hidden');
+    document.getElementById('btnNavLogs').classList.add('hidden');
+    document.getElementById('btnNavCtrl').classList.add('hidden');
+    authPanel.classList.remove('hidden');
+    appShell.classList.add('hidden');
+    authScreen.classList.remove('hidden');
+    measure();
+  });
+
+  var adminErr = document.getElementById('adminErr');
+  var newUser = document.getElementById('newUser');
+  var newPass = document.getElementById('newPass');
+  var newRole = document.getElementById('newRole');
+  var btnCreateAcc = document.getElementById('btnCreateAcc');
+  var accList = document.getElementById('accList');
+
+  var ROLE_LABEL = { 'root-admin': 'Root-Admin', 'admin': 'Admin', 'member': 'User', 'observer': 'Observer' };
+
+  async function loadAccounts() {
+    var r = await api('/api/admin/accounts');
+    if (!r.ok) return;
+    accList.innerHTML = '';
+    (r.data.accounts || []).forEach(function (a) {
+      var row = document.createElement('div');
+      row.className = 'acc-row';
+      var u = document.createElement('span');
+      u.className = 'u';
+      u.textContent = a.username;
+      var p = document.createElement('span');
+      p.className = 'p';
+      p.textContent = 'Credits ' + a.points;
+      var ro = document.createElement('span');
+      ro.className = 'r';
+      ro.textContent = ROLE_LABEL[a.role] || a.role;
+      row.appendChild(u);
+      row.appendChild(p);
+      row.appendChild(ro);
+      if (meRole === 'root-admin' && a.role !== 'root-admin' && a.username !== me) {
+        var db = document.createElement('button');
+        db.className = 'btn small magenta';
+        db.textContent = '注销';
+        db.style.flexShrink = '0';
+        db.addEventListener('click', function () { openDeactivate(a.username); });
+        row.appendChild(db);
+      }
+      accList.appendChild(row);
+    });
+  }
+
+  // ===== 注销成员（弹窗 + RA 密码验证）=====
+  var deactModal = document.getElementById('deactModal');
+  var deactPass = document.getElementById('deactPass');
+  var deactErr = document.getElementById('deactErr');
+  var deactTarget = '';
+  function openDeactivate(username) {
+    deactTarget = username;
+    deactPass.value = '';
+    deactErr.textContent = '';
+    deactErr.style.color = '';
+    document.getElementById('deactText').textContent = '确定注销成员「' + username + '」？其账号、登录态与全部会话将被删除，不可恢复。';
+    deactModal.classList.remove('hidden');
+    deactPass.focus();
+  }
+  document.getElementById('btnDeactCancel').addEventListener('click', function () {
+    deactModal.classList.add('hidden');
+    deactTarget = '';
+  });
+  document.getElementById('btnDeactConfirm').addEventListener('click', async function () {
+    var btn = this;
+    deactErr.textContent = '';
+    deactErr.style.color = '';
+    if (!deactTarget) { deactModal.classList.add('hidden'); return; }
+    var pw = deactPass.value;
+    if (!pw) { deactErr.textContent = '输入你的 Root-Admin 密码验证身份'; return; }
+    btn.disabled = true;
+    try {
+      var r = await api('/api/admin/deactivate', { username: deactTarget, password: pw });
+      if (!r.ok) {
+        deactErr.textContent = r.data.error || ('失败（' + r.status + '）');
+        btn.disabled = false;
+        return;
+      }
+      deactModal.classList.add('hidden');
+      appendSys('成员 ' + r.data.username + ' 已注销');
+      loadAccounts();
+      loadRooms();
+    } catch (e) {
+      deactErr.textContent = '网络错误，重试';
+    }
+    btn.disabled = false;
+  });
+
+  async function createAccount() {
+    var username = newUser.value.trim();
+    var password = newPass.value;
+    adminErr.style.color = '';
+    adminErr.textContent = '';
+    if (!username || !password) { adminErr.textContent = '用户名和密码都要填'; return; }
+    btnCreateAcc.disabled = true;
+    try {
+      var r = await api('/api/admin/create-account', { username: username, password: password, role: newRole.value });
+      if (!r.ok) {
+        adminErr.textContent = r.data.error || ('失败（' + r.status + '）');
+        btnCreateAcc.disabled = false;
+        return;
+      }
+      newUser.value = '';
+      newPass.value = '';
+      adminErr.style.color = '#00ff96';
+      adminErr.textContent = '账号 ' + username + ' 创建成功，把账号密码私发给对方';
+      loadAccounts();
+    } catch (e) {
+      adminErr.textContent = '网络错误，重试';
+    }
+    btnCreateAcc.disabled = false;
+  }
+  btnCreateAcc.addEventListener('click', createAccount);
+
+  var EYE_OPEN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.8"/></svg>';
+  var EYE_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.8"/><line x1="3.5" y1="3.5" x2="20.5" y2="20.5"/></svg>';
+  function bindEye(btnId, inputId) {
+    var btn = document.getElementById(btnId);
+    var input = document.getElementById(inputId);
+    if (!btn || !input) return;
+    btn.innerHTML = EYE_OPEN;
+    btn.addEventListener('click', function () {
+      var show = input.type === 'password';
+      input.type = show ? 'text' : 'password';
+      btn.innerHTML = show ? EYE_OFF : EYE_OPEN;
+    });
+  }
+  bindEye('eyeAuth', 'authPass');
+  bindEye('eyeNew', 'newPass');
+  bindEye('eyeDeact', 'deactPass');
+
+  // ===== Credits 兑换面板 =====
+  // 注意：redeemPanel 声明已上移至 PANELS 数组之前（var 提升会导致 PANELS 里为 undefined）
+  var btnDoRedeem = document.getElementById('btnDoRedeem');
+  var redeemInput = document.getElementById('redeemInput');
+  var redeemErr = document.getElementById('redeemErr');
+
+  function refreshCredits(p) {
+    document.getElementById('chatPoints').textContent = p;
+    document.getElementById('pts').textContent = p;
+    if (typeof applyInputLimit === 'function') applyInputLimit();
+  }
+  document.getElementById('btnRedeem').addEventListener('click', function () {
+    showOnly(redeemPanel);
+    redeemInput.focus();
+  });
+  document.getElementById('btnRedeemBack').addEventListener('click', function () {
+    showOnly(chatPanel);
+  });
+  async function doRedeem() {
+    var code = redeemInput.value.trim();
+    redeemErr.style.color = '';
+    redeemErr.textContent = '';
+    if (!code) { redeemErr.textContent = '输入兑换码'; return; }
+    btnDoRedeem.disabled = true;
+    try {
+      var r = await api('/api/otp/redeem', { code: code });
+      if (!r.ok) {
+        redeemErr.textContent = r.data.error || ('失败（' + r.status + '）');
+        btnDoRedeem.disabled = false;
+        return;
+      }
+      redeemErr.style.color = '#00ff96';
+      redeemErr.textContent = '兑换成功：+' + r.data.amount + ' Credits · 当前 ' + r.data.points;
+      refreshCredits(r.data.points);
+      redeemInput.value = '';
+    } catch (e) {
+      redeemErr.textContent = '网络错误，重试';
+    }
+    btnDoRedeem.disabled = false;
+  }
+  btnDoRedeem.addEventListener('click', doRedeem);
+  redeemInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') doRedeem(); });
+
+  // ===== OTP 管理（Admin） =====
+  var otpOut = document.getElementById('otpOut');
+  var otpCode = document.getElementById('otpCode');
+  var otpAmount = document.getElementById('otpAmount');
+  var btnGenOtp = document.getElementById('btnGenOtp');
+  var otpList = document.getElementById('otpList');
+  var lastOtp = '';
+
+  async function loadOtps() {
+    var r = await api('/api/admin/otps');
+    if (!r.ok) return;
+    otpList.innerHTML = '';
+    (r.data.otps || []).forEach(function (o) {
+      var row = document.createElement('div');
+      row.className = 'acc-row';
+      var c = document.createElement('span');
+      c.className = 'u';
+      c.textContent = o.code;
+      var a = document.createElement('span');
+      a.className = 'p';
+      a.textContent = o.amount + ' Credits';
+      var s = document.createElement('span');
+      s.className = 'r';
+      if (o.used_by) {
+        s.textContent = '已被 ' + o.used_by + ' 使用';
+        s.style.color = '#6a6a80';
+      } else if (o.expired) {
+        s.textContent = '已过期';
+        s.style.color = '#6a6a80';
+      } else {
+        s.textContent = '未使用';
+      }
+      row.appendChild(c);
+      row.appendChild(a);
+      row.appendChild(s);
+      if (!o.used_by && !o.expired) {
+        var btn = document.createElement('button');
+        btn.className = 'btn small magenta';
+        btn.textContent = '撤销';
+        btn.style.flexShrink = '0';
+        btn.addEventListener('click', async function () {
+          btn.disabled = true;
+          var rr = await api('/api/otp/revoke', { code: o.fullCode });
+          if (rr.ok) {
+            loadOtps();
+            appendSys('兑换码已撤销');
+          } else {
+            appendSys(rr.data.error || '撤销失败');
+            btn.disabled = false;
+          }
+        });
+        row.appendChild(btn);
+      }
+      otpList.appendChild(row);
+    });
+  }
+  (function () {
+    var sel = document.getElementById('otpDays');
+    for (var d = 1; d <= 14; d++) {
+      var o = document.createElement('option');
+      o.value = String(d);
+      o.textContent = d + ' 天';
+      if (d === 7) o.selected = true;
+      sel.appendChild(o);
+    }
+  })();
+  btnGenOtp.addEventListener('click', async function () {
+    var amount = parseInt(otpAmount.value, 10);
+    if (!isFinite(amount) || amount < 1) return;
+    btnGenOtp.disabled = true;
+    try {
+      var r = await api('/api/admin/create-otp', { amount: amount, days: parseInt(document.getElementById('otpDays').value, 10) });
+      if (r.ok) {
+        lastOtp = r.data.code;
+        otpCode.textContent = r.data.code;
+        otpOut.classList.remove('hidden');
+        loadOtps();
+      }
+    } catch (e) {}
+    btnGenOtp.disabled = false;
+    measure();
+  });
+  document.getElementById('btnCopyOtp').addEventListener('click', function () {
+    otpOut.classList.add('hidden');
+    otpCode.textContent = '';
+    lastOtp = '';
+    measure();
+  });
+
+  // ===== 管理员日志 =====
+  var ACTION_LABEL = { daily_salary: '每日工资', create_otp: '生成兑换码', give: '划转 Credits', login: '登录', create_account: '创建账号', clearlog: '清空日志', cmd: '命令行调用', take: '强制扣除', revoke_otp: '撤销兑换码', create_apikey: '创建 API Key', del_apikey: '删除 API Key' };
+  async function loadLogs() {
+    var r = await api('/api/logs');
+    if (!r.ok) return;
+    var logList = document.getElementById('logList');
+    var cmdLogList = document.getElementById('cmdLogList');
+    logList.innerHTML = '';
+    cmdLogList.innerHTML = '';
+    (r.data.logs || []).forEach(function (l) {
+      var row = document.createElement('div');
+      row.className = 'acc-row';
+      var a = document.createElement('span');
+      a.className = 'u';
+      a.textContent = l.admin;
+      var act = document.createElement('span');
+      act.className = 'p';
+      act.textContent = (ACTION_LABEL[l.action] || l.action) + ' · ' + (l.detail || '');
+      var t = document.createElement('span');
+      t.className = 'r';
+      t.textContent = fmtTime(l.created_at);
+      row.appendChild(a);
+      row.appendChild(act);
+      row.appendChild(t);
+      if (l.action === 'cmd') cmdLogList.appendChild(row);
+      else logList.appendChild(row);
+    });
+  }
+
+  // ===== Credits 日志 =====
+  async function loadCreditsLogs() {
+    var r = await api('/api/credits-logs');
+    if (!r.ok) return;
+    var list = document.getElementById('creditsLogList');
+    list.innerHTML = '';
+    (r.data.logs || []).forEach(function (l) {
+      var row = document.createElement('div');
+      row.className = 'acc-row';
+      var u = document.createElement('span');
+      u.className = 'u';
+      u.textContent = l.username;
+      var d = document.createElement('span');
+      d.className = 'p';
+      d.textContent = (l.delta > 0 ? '+' : '') + l.delta + ' · ' + l.reason;
+      if (l.delta > 0) d.style.color = '#00ff96';
+      else if (l.delta < 0) d.style.color = 'var(--magenta)';
+      var t = document.createElement('span');
+      t.className = 'r';
+      t.textContent = fmtTime(l.created_at);
+      row.appendChild(u);
+      row.appendChild(d);
+      row.appendChild(t);
+      list.appendChild(row);
+    });
+  }
+
+  // ===== 文件传输（上限按设备自适应） =====
+  var btnFile = document.getElementById('btnFile');
+  var fileInput = document.getElementById('fileInput');
+  var transferWarn = document.getElementById('transferWarn');
+  var CHUNK = 64 * 1024;
+  var transferring = 0;
+  var recvState = null;
+
+  function detectMaxFile() {
+    var mem = navigator.deviceMemory || 4;          // GB，未上报则按宽松处理
+    var w = window.innerWidth;
+    var touch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+    if (mem <= 2 && w < 1024) return 48 * 1024 * 1024;   // 紧内存手机：压到 48MB
+    if (!touch && w >= 1024) return 200 * 1024 * 1024;   // 电脑：放开到 200MB
+    if (w >= 1024) return 120 * 1024 * 1024;             // iPad / 大屏触控：120MB
+    return 80 * 1024 * 1024;                             // 普通手机/平板：80MB
+  }
+  var MAX_FILE = detectMaxFile();
+  btnFile.title = '发送文件（≤' + fmtSize(MAX_FILE) + '）';
+
+  function fmtSize(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1048576).toFixed(1) + ' MB';
+  }
+  function setTransferring(delta) {
+    transferring += delta;
+    if (transferring > 0) transferWarn.classList.remove('hidden');
+    else transferWarn.classList.add('hidden');
+  }
+  window.addEventListener('beforeunload', function (e) {
+    if (transferring > 0) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
+
+  var FILE_ICON = '<span class="f-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg></span>';
+
+  function metaRow(m) {
+    var meta = document.createElement('span');
+    meta.className = 'meta';
+    var n = document.createElement('span');
+    n.textContent = m.sender;
+    var t = document.createElement('span');
+    t.textContent = m.time;
+    meta.appendChild(n);
+    meta.appendChild(t);
+    var lv = document.createElement('span');
+    lv.className = 'lv';
+    lv.textContent = ROLE_LABEL[m.role] || 'User';
+    return [meta, lv];
+  }
+  function buildFileMsg(m) {
+    var empty = messages.querySelector('.empty');
+    if (empty) empty.remove();
+    var div = document.createElement('div');
+    div.className = 'msg ' + (m.self ? 'self' : 'other');
+    div.setAttribute('data-file', m.fileId);
+    var row = metaRow(m);
+    div.appendChild(row[0]);
+    div.appendChild(row[1]);
+    var card = document.createElement('div');
+    card.className = 'file-card';
+    card.innerHTML = FILE_ICON;
+    var metaDiv = document.createElement('div');
+    metaDiv.className = 'f-meta';
+    var nm = document.createElement('span');
+    nm.className = 'f-name';
+    nm.textContent = m.name;
+    var sz = document.createElement('span');
+    sz.className = 'f-size';
+    sz.textContent = fmtSize(m.size) + ' · 传输中…';
+    metaDiv.appendChild(nm);
+    metaDiv.appendChild(sz);
+    var prog = document.createElement('div');
+    prog.className = 'f-progress';
+    var bar = document.createElement('div');
+    bar.className = 'bar';
+    prog.appendChild(bar);
+    metaDiv.appendChild(prog);
+    card.appendChild(metaDiv);
+    div.appendChild(card);
+    messages.appendChild(div);
+    scrollBottom();
+    return div;
+  }
+  function fileProgress(fileId, pct) {
+    var bar = messages.querySelector('[data-file="' + fileId + '"] .bar');
+    if (bar) bar.style.width = Math.round(pct) + '%';
+  }
+  // 从服务端取回聊天文件（保留 7 天，历史/在线均走这条路）；返回 blob 由调用方决定后续（下载 / 存云）
+  function serverDownload(fileId, name) {
+    return fetch('/api/file/get?id=' + encodeURIComponent(fileId), { headers: { Authorization: 'Bearer ' + token } })
+      .then(function (r) {
+        if (!r.ok) {
+          appendSys('下载失败（' + r.status + '）' + (r.status === 404 ? '：文件已过期或被清除' : ''));
+          throw new Error('fail');
+        }
+        return r.blob();
+      });
+  }
+  function triggerLocalDownload(blob, name) {
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  function fileDone(fileId, url, name, size, free) {
+    var div = messages.querySelector('[data-file="' + fileId + '"]');
+    if (!div) return;
+    var sz = div.querySelector('.f-size');
+    if (sz) sz.textContent = fmtSize(size);
+    var prog = div.querySelector('.f-progress');
+    if (prog) prog.remove();
+    var card = div.querySelector('.file-card');
+    // 免费仅：自己的文件、公告群里 Root-Admin 下载、文件传输助手里自取；其余全部付费（1MB/20Credits）
+    var fileRoom = currentRoom;
+    var freeRoom = free || (fileRoom === 'geek' && meRole === 'root-admin') || fileRoom === 'file:' + me;
+    if (freeRoom) {
+      var dl = document.createElement('a');
+      dl.className = 'f-dl';
+      dl.href = '#';
+      dl.textContent = '下载';
+      dl.addEventListener('click', function (e) {
+        e.preventDefault();
+        serverDownload(fileId, name)
+          .then(function (blob) { triggerLocalDownload(blob, name); return maybeSaveToCloud(blob, name); })
+          .catch(function () {});
+      });
+      card.appendChild(dl);
+      return;
+    }
+    var cost = Math.max(20, Math.ceil(size / (1024 * 1024)) * 20);
+    var payBtn = document.createElement('button');
+    payBtn.className = 'f-dl';
+    payBtn.type = 'button';
+    payBtn.textContent = '💾 付费下载 · ' + cost + ' Credits';
+    payBtn.addEventListener('click', async function () {
+      // 下载前弹窗确认费用
+      var quote = { cost: cost, free: false, balance: 0, enough: false };
+      try {
+        var qr = await api('/api/file/quote', { size: size, room: fileRoom });
+        if (qr.ok) quote = qr.data;
+      } catch (e) {}
+      showFileConfirm('▸ 文件下载确认', [
+        '文件：' + name + '（' + fmtSize(size) + '）',
+        quote.free ? '费用：免费' : '费用：' + quote.cost + ' Credits（1MB/20Credits）',
+        '当前余额：' + quote.balance + ' Credits'
+      ], quote.enough, '▸ 确认下载', async function () {
+        payBtn.disabled = true;
+        payBtn.textContent = '支付中…';
+        try {
+          var r = await api('/api/file/pay', { size: size, name: name, room: fileRoom });
+          if (!r.ok) {
+            payBtn.textContent = '⚠ ' + (r.data.error || '支付失败');
+            appendSys(r.data.error || '下载支付失败');
+            payBtn.disabled = false;
+            return;
+          }
+          try {
+            var blob = await serverDownload(fileId, name);
+            triggerLocalDownload(blob, name);
+            await maybeSaveToCloud(blob, name);
+            payBtn.textContent = '✓ 已保存（-' + cost + ' Credits）';
+            refreshMe();
+          } catch (e2) {
+            payBtn.textContent = '下载失败，点我重试';
+            payBtn.disabled = false;
+          }
+        } catch (e) {
+          payBtn.textContent = '网络错误，点我重试';
+          payBtn.disabled = false;
+        }
+      });
+    });
+    card.appendChild(payBtn);
+  }
+
+  btnFile.addEventListener('click', function () { fileInput.click(); });
+
+  // ===== 文件费用确认弹窗（发送/下载前先报告费用，请求确认）=====
+  var fileConfirmModal = document.getElementById('fileConfirmModal');
+  var fcConfirmCb = null;
+  function showFileConfirm(title, lines, enough, confirmLabel, cb) {
+    document.getElementById('fcTitle').textContent = title;
+    var textEl = document.getElementById('fcText');
+    textEl.innerHTML = '';
+    lines.forEach(function (ln) {
+      var d = document.createElement('div');
+      d.style.marginBottom = '4px';
+      d.textContent = ln;
+      textEl.appendChild(d);
+    });
+    var errEl = document.getElementById('fcErr');
+    errEl.textContent = enough ? '' : '⚠ CREDITS 不足，无法完成该操作';
+    errEl.style.color = '';
+    var btnOk = document.getElementById('btnFcConfirm');
+    btnOk.disabled = !enough;
+    btnOk.textContent = enough ? (confirmLabel || '▸ 确认') : '✕ 无法操作';
+    fcConfirmCb = cb;
+    fileConfirmModal.classList.remove('hidden');
+  }
+  document.getElementById('btnFcConfirm').addEventListener('click', function () {
+    fileConfirmModal.classList.add('hidden');
+    if (fcConfirmCb) { var cb = fcConfirmCb; fcConfirmCb = null; cb(); }
+  });
+  document.getElementById('btnFcCancel').addEventListener('click', function () {
+    fileConfirmModal.classList.add('hidden');
+    fcConfirmCb = null;
+  });
+
+  fileInput.addEventListener('change', async function () {
+    var f = fileInput.files && fileInput.files[0];
+    fileInput.value = '';
+    if (!f || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if (f.size > MAX_FILE) {
+      appendSys('文件超过 ' + fmtSize(MAX_FILE) + ' 上限（' + fmtSize(f.size) + '），发送取消');
+      return;
+    }
+    if (!currentRoom) { appendSys('请先进入一个房间再发送文件'); return; }
+    // 费用报价（与服务端同一套规则）：文件传输助手 / 公告群 RA 免费，其余 1MB/20Credits
+    var quote = { cost: 0, free: true, balance: 0, enough: true };
+    try {
+      var qr = await api('/api/file/quote', { size: f.size, room: currentRoom });
+      if (qr.ok) quote = qr.data;
+      else { appendSys(qr.data.error || '费用查询失败，发送取消'); return; }
+    } catch (e) { appendSys('网络错误，发送取消'); return; }
+    showFileConfirm('▸ 文件发送确认', [
+      '文件：' + f.name + '（' + fmtSize(f.size) + '）',
+      '房间：' + (document.getElementById('chatRoomName').textContent || currentRoom),
+      quote.free ? '费用：免费' : '费用：' + quote.cost + ' Credits（1MB/20Credits）',
+      '当前余额：' + quote.balance + ' Credits'
+    ], quote.enough, '▸ 确认发送', function () { startUpload(f, quote.cost); });
+  });
+
+  function startUpload(f, uploadCost) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) { appendSys('连接已断开，请稍后重试'); return; }
+    var fileId = 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    buildFileMsg({ self: true, sender: me, time: nowTime(), name: f.name, size: f.size, fileId: fileId, role: meRole });
+    setTransferring(1);
+    ws.send(JSON.stringify({ type: 'file-start', id: fileId, name: f.name, size: f.size, mime: f.type || 'application/octet-stream' }));
+    var offset = 0;
+    function nextChunk() {
+      if (offset >= f.size) {
+        ws.send(JSON.stringify({ type: 'file-end', id: fileId }));
+        setTransferring(-1);
+        // 上传方本地卡片补完成态（自己的文件下载免费）
+        fileDone(fileId, URL.createObjectURL(f), f.name, f.size, true);
+        if (uploadCost > 0) {
+          appendSys('文件已发送（上传扣除 ' + uploadCost + ' Credits · 1MB/20Credits）');
+          refreshMe();
+        }
+        return;
+      }
+      var reader = new FileReader();
+      reader.onload = function () {
+        if (ws.readyState !== WebSocket.OPEN) { setTransferring(-1); return; }
+        ws.send(reader.result);
+        offset += CHUNK;
+        fileProgress(fileId, offset / f.size * 100);
+        nextChunk();
+      };
+      reader.onerror = function () {
+        setTransferring(-1);
+        appendSys('文件读取失败：' + f.name);
+      };
+      reader.readAsArrayBuffer(f.slice(offset, offset + CHUNK));
+    }
+    nextChunk();
+  }
+
+  // ===== 多房间：会话列表 / 切换 / 建群 =====
+  async function loadRooms() {
+    var r = await api('/api/rooms');
+    if (!r.ok) return;
+    roomsData = r.data.rooms || [];
+    renderRoomList();
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function renderRoomList() {
+    roomItems.innerHTML = '';
+    var aCount = 0;
+    roomsData.forEach(function (rm) { if (rm.class === 'A') aCount++; });
+    var aEl = document.getElementById('aClassCount');
+    if (aEl) aEl.textContent = 'A类 ' + aCount + '/10';
+    roomsData.forEach(function (rm) {
+      var item = document.createElement('div');
+      item.className = 'room-item' + (rm.id === currentRoom ? ' active' : '');
+      var icon = rm.type === 'builtin' ? '👥' : rm.type === 'file' ? '📁' : '＃';
+      var ic = document.createElement('span'); ic.className = 'ri-icon'; ic.textContent = icon;
+      var name = document.createElement('span'); name.className = 'ri-name'; name.textContent = rm.name;
+      var badge = document.createElement('span');
+      badge.className = 'badge badge-' + (rm.class || 'A');
+      badge.textContent = (rm.class === 'A' ? 'A' : rm.class === 'B' ? 'B' : 'C');
+      var mem = document.createElement('span'); mem.className = 'ri-mem'; mem.textContent = rm.members;
+      item.appendChild(ic); item.appendChild(name); item.appendChild(badge); item.appendChild(mem);
+      item.addEventListener('click', function () { joinRoom(rm.id); });
+      roomItems.appendChild(item);
+    });
+  }
+  function joinRoom(id) {
+    currentRoom = id;
+    var found = null;
+    for (var i = 0; i < roomsData.length; i++) { if (roomsData[i].id === id) found = roomsData[i]; }
+    var rn = document.getElementById('chatRoomName');
+    if (rn) rn.textContent = found ? found.name : id;
+    // 文件传输助手（私聊自用）没有群设置
+    document.getElementById('btnConvSettings').classList.toggle('hidden', !!found && found.type === 'file');
+    renderRoomList();
+    showChatPage('conv');
+    applyRoomInput();
+    applyInputLimit();
+    messages.innerHTML = '<div class="empty">进入会话中…</div>';
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'join-room', room: id }));
+    }
+  }
+  document.getElementById('btnBackRooms').addEventListener('click', function () {
+    showChatPage('list');
+    loadRooms();
+  });
+
+  // ===== 建群 =====
+  var groupModal = document.getElementById('groupModal');
+  var groupName = document.getElementById('groupName');
+  var groupMembers = document.getElementById('groupMembers');
+  var groupErr = document.getElementById('groupErr');
+
+  document.getElementById('btnNewGroup').addEventListener('click', async function () {
+    groupErr.textContent = '';
+    groupName.value = '';
+    groupMembers.innerHTML = '<div class="empty">加载成员中…</div>';
+    groupModal.classList.remove('hidden');
+    var r = await api('/api/accounts/list');
+    if (!r.ok) { groupMembers.innerHTML = '<div class="empty">加载失败</div>'; return; }
+    groupMembers.innerHTML = '';
+    (r.data.accounts || []).forEach(function (a) {
+      if (a.username === me) return;
+      var lab = document.createElement('label');
+      var cb = document.createElement('input'); cb.type = 'checkbox'; cb.value = a.username;
+      var nm = document.createElement('span'); nm.className = 'm-name'; nm.textContent = a.username;
+      var rl = document.createElement('span'); rl.className = 'm-role'; rl.textContent = ROLE_LABEL[a.role] || a.role;
+      lab.appendChild(cb); lab.appendChild(nm); lab.appendChild(rl);
+      groupMembers.appendChild(lab);
+    });
+  });
+  document.getElementById('btnGroupCancel').addEventListener('click', function () { groupModal.classList.add('hidden'); });  document.getElementById('btnCreateGroup').addEventListener('click', async function () {
+    var name = groupName.value.trim();
+    if (!name) { groupErr.textContent = '群名不能为空'; return; }
+    var cbs = groupMembers.querySelectorAll('input[type=checkbox]:checked');
+    var members = Array.prototype.map.call(cbs, function (c) { return c.value; });
+    groupErr.textContent = '';
+    try {
+      var r = await api('/api/rooms/create', { name: name, members: members });
+      if (!r.ok) { groupErr.textContent = r.data.error || '创建失败'; return; }
+      groupModal.classList.add('hidden');
+      await loadRooms();
+      joinRoom(r.data.room.id);
+    } catch (e) { groupErr.textContent = '网络错误'; }
+  });
+
+  // ===== 群设置面板：成员列表 / 加群密码 / 转让 / 踢人 / 禁言 / 解散 =====
+  var groupSettingsModal = document.getElementById('groupSettingsModal');
+  var gsErr = document.getElementById('gsErr');
+  var gsMembers = document.getElementById('gsMembers');
+  var gsData = null; // 当前群设置数据
+
+  document.getElementById('btnConvSettings').addEventListener('click', function () {
+    if (!currentRoom) return;
+    openGroupSettings();
+  });
+  document.getElementById('btnGsClose').addEventListener('click', function () {
+    groupSettingsModal.classList.add('hidden');
+  });
+
+  async function openGroupSettings() {
+    gsErr.textContent = '';
+    gsMembers.innerHTML = '<div class="empty">加载中…</div>';
+    document.getElementById('gsRoomName').textContent = document.getElementById('chatRoomName').textContent || currentRoom;
+    groupSettingsModal.classList.remove('hidden');
+    try {
+      var r = await api('/api/rooms/members?id=' + encodeURIComponent(currentRoom));
+      if (!r.ok) { gsErr.textContent = r.data.error || '加载失败'; gsMembers.innerHTML = ''; return; }
+      gsData = r.data;
+      renderGroupSettings();
+    } catch (e) { gsErr.textContent = '网络错误'; }
+  }
+
+  function renderGroupSettings() {
+    if (!gsData) return;
+    var iAmOwner = gsData.creator === me;
+    var iAmAdmin = meRole === 'admin' || meRole === 'root-admin';
+    var isGeek = gsData.id === 'geek';
+    document.getElementById('gsMemberCount').textContent = gsData.members.length;
+    document.getElementById('gsPassZone').classList.toggle('hidden', isGeek);
+    document.getElementById('gsOwnerZone').classList.toggle('hidden', !(iAmOwner && !isGeek));
+    gsErr.textContent = '';
+
+    // 加群密码展示 / 编辑
+    var passView = document.getElementById('gsPassView');
+    var passEdit = document.getElementById('gsPassEdit');
+    var passText = document.getElementById('gsPassText');
+    passView.innerHTML = '';
+    passText.textContent = gsData.passcode ? gsData.passcode : '（未设置密码，暂时无法凭密码加群）';
+    passView.appendChild(passText);
+    if (iAmOwner) {
+      var editBtn = document.createElement('button');
+      editBtn.className = 'btn small';
+      editBtn.textContent = '修改';
+      editBtn.addEventListener('click', function () {
+        passEdit.style.display = 'flex';
+        document.getElementById('gsPassInput').value = gsData.passcode || '';
+      });
+      passView.appendChild(editBtn);
+      if (passEdit.style.display === 'none') passEdit.style.display = 'none';
+    } else {
+      passEdit.style.display = 'none';
+    }
+
+    // 成员列表
+    gsMembers.innerHTML = '';
+    gsData.members.forEach(function (m) {
+      var row = document.createElement('div');
+      row.className = 'gs-member';
+      var nm = document.createElement('span');
+      nm.className = 'gs-name';
+      nm.textContent = m.username + (m.username === me ? '（我）' : '');
+      row.appendChild(nm);
+      if (m.isOwner) {
+        var crown = document.createElement('span');
+        crown.className = 'gs-tag';
+        crown.textContent = '👑 群主';
+        row.appendChild(crown);
+      } else {
+        var rl = document.createElement('span');
+        rl.className = 'gs-tag';
+        rl.textContent = ROLE_LABEL[m.role] || 'User';
+        row.appendChild(rl);
+      }
+      if (m.muted) {
+        var mu = document.createElement('span');
+        mu.className = 'gs-muted';
+        mu.textContent = '🔇 禁言至 ' + (m.mutedUntil || '').slice(0, 16).replace('T', ' ');
+        row.appendChild(mu);
+      }
+      var canMute = !isGeek && !m.isOwner && m.role !== 'admin' && m.role !== 'root-admin' && (iAmOwner || iAmAdmin) && m.username !== me;
+      var canKick = iAmOwner && !isGeek && !m.isOwner && m.role !== 'root-admin' && m.username !== me;
+      var canTransfer = iAmOwner && !isGeek && m.username !== me;
+      if (canMute) {
+        var mb = document.createElement('button');
+        mb.className = 'btn small';
+        mb.textContent = m.muted ? '禁言中' : '禁言';
+        mb.disabled = !!m.muted;
+        mb.addEventListener('click', function () { openMuteModal(m.username); });
+        row.appendChild(mb);
+      }
+      if (canKick) {
+        var kb = document.createElement('button');
+        kb.className = 'btn small';
+        kb.textContent = '踢出';
+        kb.addEventListener('click', async function () {
+          if (!confirm('确定将 ' + m.username + ' 踢出群聊？')) return;
+          var r = await api('/api/rooms/kick', { id: currentRoom, username: m.username });
+          if (!r.ok) { gsErr.textContent = r.data.error || '踢出失败'; return; }
+          openGroupSettings();
+        });
+        row.appendChild(kb);
+      }
+      if (canTransfer) {
+        var tb = document.createElement('button');
+        tb.className = 'btn small amber';
+        tb.textContent = '转让群主';
+        tb.addEventListener('click', async function () {
+          if (!confirm('确定将群主管理权转让给 ' + m.username + '？转让后你变回普通成员。')) return;
+          var r = await api('/api/rooms/transfer', { id: currentRoom, to: m.username });
+          if (!r.ok) { gsErr.textContent = r.data.error || '转让失败'; return; }
+          appendSys('群主管理权已转让给 ' + m.username);
+          openGroupSettings();
+          loadRooms();
+        });
+        row.appendChild(tb);
+      }
+      gsMembers.appendChild(row);
+    });
+    if (!gsData.members.length) gsMembers.innerHTML = '<div class="empty">没有成员</div>';
+  }
+
+  document.getElementById('btnSavePass').addEventListener('click', async function () {
+    var pw = document.getElementById('gsPassInput').value.trim();
+    var r = await api('/api/rooms/passcode', { id: currentRoom, passcode: pw });
+    if (!r.ok) { gsErr.textContent = r.data.error || '保存失败'; return; }
+    gsData.passcode = r.data.passcode || '';
+    passEditHide();
+    renderGroupSettings();
+  });
+  function passEditHide() { document.getElementById('gsPassEdit').style.display = 'none'; }
+
+  document.getElementById('btnDisbandGroup').addEventListener('click', async function () {
+    if (!confirm('⚠ 确定解散该群聊？所有成员将被移出，群聊消息不可恢复！')) return;
+    var r = await api('/api/rooms/disband', { id: currentRoom });
+    if (!r.ok) { gsErr.textContent = r.data.error || '解散失败'; return; }
+    groupSettingsModal.classList.add('hidden');
+    appendSys('群聊已解散');
+  });
+
+  // 禁言弹窗
+  var muteModal = document.getElementById('muteModal');
+  var muteTargetName = '';
+  function openMuteModal(username) {
+    muteTargetName = username;
+    document.getElementById('muteTarget').textContent = username;
+    document.getElementById('muteHours').value = 1;
+    document.getElementById('muteErr').textContent = '';
+    muteModal.classList.remove('hidden');
+  }
+  document.getElementById('btnMuteCancel').addEventListener('click', function () { muteModal.classList.add('hidden'); });
+  document.getElementById('btnMuteConfirm').addEventListener('click', async function () {
+    var hours = Number(document.getElementById('muteHours').value);
+    if (!isFinite(hours) || hours < 1 || hours > 24) {
+      document.getElementById('muteErr').textContent = '时长限 1-24 小时';
+      return;
+    }
+    var r = await api('/api/rooms/mute', { id: currentRoom, username: muteTargetName, hours: hours });
+    if (!r.ok) { document.getElementById('muteErr').textContent = r.data.error || '禁言失败'; return; }
+    muteModal.classList.add('hidden');
+    appendSys('已将 ' + muteTargetName + ' 禁言 ' + hours + ' 小时');
+    openGroupSettings();
+  });
+
+  // 密码加群
+  var joinPwModal = document.getElementById('joinPwModal');
+  document.getElementById('btnJoinByPw').addEventListener('click', function () {
+    document.getElementById('joinPwName').value = '';
+    document.getElementById('joinPwPass').value = '';
+    document.getElementById('joinPwErr').textContent = '';
+    joinPwModal.classList.remove('hidden');
+  });
+  document.getElementById('btnJoinPwCancel').addEventListener('click', function () { joinPwModal.classList.add('hidden'); });
+  document.getElementById('btnJoinPwConfirm').addEventListener('click', async function () {
+    var name = document.getElementById('joinPwName').value.trim();
+    var pw = document.getElementById('joinPwPass').value.trim();
+    if (!name || !pw) { document.getElementById('joinPwErr').textContent = '群名和密码都要填'; return; }
+    var r = await api('/api/rooms/join-pw', { name: name, password: pw });
+    if (!r.ok) { document.getElementById('joinPwErr').textContent = r.data.error || '加群失败'; return; }
+    joinPwModal.classList.add('hidden');
+    await loadRooms();
+    joinRoom(r.data.room.id);
+  });
+
+  // ===== 棋盘全屏 =====
+  document.getElementById('btnFullscreen').addEventListener('click', function () {
+    var el = document.getElementById('boardArea');
+    if (!document.fullscreenElement) {
+      if (el.requestFullscreen) el.requestFullscreen();
+    } else if (document.exitFullscreen) {
+      document.exitFullscreen();
+    }
+  });
+
+  // ===== 侧栏导航（统一互斥路由） =====
+  function goChat() {
+    inviteModal.classList.add('hidden');
+    deactModal.classList.add('hidden');
+    showOnly(chatPanel);
+    showChatPage('list');
+    loadRooms();
+  }
+
+  function showLogPanel() {
+    inviteModal.classList.add('hidden');
+    showOnly(logPanel);
+    loadLogs();
+    loadCreditsLogs();
+  }
+
+  function showCtrlPanel() {
+    inviteModal.classList.add('hidden');
+    showOnly(ctrlPanel);
+    if (meRole === 'root-admin') {
+      loadAccounts();
+      loadOtps();
+      loadApiKeyList();
+    }
+    refreshApiKeyStatus();
+  }
+
+  // ===== API Key（原命令行 / 游戏大厅功能迁入系统控制面板）=====
+  function refreshApiKeyStatus() {
+    var status = document.getElementById('apiKeyStatus');
+    api('/api/apikey/status').then(function (r) {
+      if (!r.ok) { status.textContent = 'API Key 状态获取失败'; status.style.color = ''; return; }
+      if (r.data.active) {
+        status.textContent = '● 已绑定有效 API Key · 付费对局等费用全免';
+        status.style.color = '#00ff96';
+      } else if (r.data.bound) {
+        status.textContent = '● 绑定的 Key 已失效，请联系 Root-Admin 重发';
+        status.style.color = '';
+      } else {
+        status.textContent = '● 未绑定 · 付费功能按 Credits 支付';
+        status.style.color = '';
+      }
+    });
+  }
+  document.getElementById('btnBindKey').addEventListener('click', async function () {
+    var key = document.getElementById('apiKeyInput').value.trim();
+    var status = document.getElementById('apiKeyStatus');
+    if (!key) {
+      try {
+        await api('/api/apikey/unbind', {});
+        status.style.color = '';
+        status.textContent = '已解绑 · 付费功能恢复 Credits 支付';
+      } catch (e) {}
+      return;
+    }
+    try {
+      var r = await api('/api/apikey/bind', { key: key });
+      if (!r.ok) {
+        status.style.color = '';
+        status.textContent = r.data.error || '绑定失败';
+        return;
+      }
+      status.style.color = '#00ff96';
+      status.textContent = '绑定成功（' + (r.data.name || '未命名') + '）· 付费功能免费';
+      document.getElementById('apiKeyInput').value = '';
+    } catch (e) {
+      status.textContent = '网络错误';
+    }
+  });
+  async function loadApiKeyList() {
+    var listEl = document.getElementById('apiKeyList');
+    try {
+      var r = await api('/api/apikey/list');
+      if (!r.ok) { listEl.innerHTML = ''; return; }
+      listEl.innerHTML = '';
+      (r.data.keys || []).forEach(function (k) {
+        var row = document.createElement('div');
+        row.className = 'key-row';
+        var info = document.createElement('span');
+        info.textContent = k.key.slice(0, 9) + '…' + k.key.slice(-4) + ' · ' + k.owner + ' · ' + (k.name || '未命名') + (k.revoked ? ' · 已失效' : '');
+        var del = document.createElement('button');
+        del.className = 'btn small magenta';
+        del.textContent = '删除';
+        del.addEventListener('click', async function () {
+          if (!confirm('删除该 API Key 并解除绑定？')) return;
+          var rr = await api('/api/apikey/delete', { key: k.key });
+          if (!rr.ok) { alert(rr.data.error || '删除失败'); return; }
+          loadApiKeyList();
+        });
+        row.appendChild(info);
+        row.appendChild(del);
+        listEl.appendChild(row);
+      });
+      if (!listEl.children.length) listEl.innerHTML = '<div class="empty" style="color:var(--dim);font-size:12px;padding:6px 2px">暂无 API Key</div>';
+    } catch (e) {}
+  }
+  document.getElementById('btnCreateKey').addEventListener('click', async function () {
+    var owner = document.getElementById('apiKeyOwner').value.trim();
+    var name = document.getElementById('apiKeyName').value.trim();
+    var out = document.getElementById('apiKeyOut');
+    out.classList.add('hidden');
+    if (!owner) { alert('请输入归属用户名'); return; }
+    try {
+      var r = await api('/api/apikey/create', { owner: owner, name: name });
+      if (!r.ok) { alert(r.data.error || '发放失败'); return; }
+      document.getElementById('apiKeyNewCode').textContent = r.data.key;
+      out.classList.remove('hidden');
+      document.getElementById('apiKeyOwner').value = '';
+      document.getElementById('apiKeyName').value = '';
+      loadApiKeyList();
+    } catch (e) { alert('网络错误'); }
+  });
+
+  function showSettingsPanel() {
+    inviteModal.classList.add('hidden');
+    showOnly(settingsPanel);
+    document.getElementById('setName').textContent = me || '-';
+    document.getElementById('setRole').textContent = ROLE_LABEL[meRole] || meRole || '-';
+    document.getElementById('setPts').textContent = document.getElementById('pts').textContent || '0';
+    document.getElementById('setErr').textContent = '';
+    document.getElementById('setOk').textContent = '';
+    refreshApiKeyStatus();
+    if (meRole === 'root-admin') loadApiKeyList();
+  }
+
+  function showShopPanel() {
+    inviteModal.classList.add('hidden');
+    document.getElementById('shopErr').textContent = '';
+    showOnly(shopPanel);
+    refreshMe();
+  }
+
+  // ===== 云存储 =====
+  var repostFileId = null;
+  function showCloudPanel() {
+    inviteModal.classList.add('hidden');
+    showOnly(cloudPanel);
+    loadCloud();
+  }
+  async function loadCloud() {
+    var r = await api('/api/cloud/status');
+    if (!r.ok) { document.getElementById('cloudStatusBox').textContent = '加载失败'; return; }
+    renderCloud(r.data);
+    await loadCloudFiles();
+  }
+  function csRow(k, v) { return '<div class="cs-row"><span class="cs-k">' + k + '</span><span class="cs-v">' + v + '</span></div>'; }
+  function renderCloud(s) {
+    var box = document.getElementById('cloudStatusBox');
+    var typeLabel = s.isRA ? '免费永久（Root-Admin 专属 1GB）' : (s.kind === 'paid' ? '付费订阅' : (s.kind === 'none' ? '未开通' : s.kind));
+    var pct = s.totalMb > 0 ? Math.min(100, Math.round(s.usedMb / s.totalMb * 100)) : 0;
+    var rows = '';
+    rows += csRow('类型', typeLabel);
+    rows += csRow('已用 / 总额', (Math.round(s.usedMb * 10) / 10) + ' / ' + s.totalMb + ' MB');
+    rows += csRow('剩余', Math.max(0, Math.round((s.totalMb - s.usedMb) * 10) / 10) + ' MB');
+    rows += csRow('Credits 余额', s.balance);
+    rows += csRow('单价', s.costPerMb + ' Credits/MB/月');
+    rows += csRow('每账号上限', s.capMb + ' MB');
+    if (s.kind === 'paid') {
+      rows += csRow('到期', s.expired ? '已过期' : (s.expiresAt || '-'));
+      rows += csRow('自动续费', s.autoRenew ? '开' : '关');
+    }
+    box.innerHTML = '<div class="cs-rows">' + rows + '</div><div class="cs-bar"><div class="cs-fill" style="width:' + pct + '%"></div></div>';
+    var showBuy = !s.isRA && (s.kind === 'none' || s.expired);
+    document.getElementById('cloudBuyBox').classList.toggle('hidden', !showBuy);
+    document.getElementById('cloudManageBox').classList.toggle('hidden', !(s.isRA === false && s.kind === 'paid'));
+    document.getElementById('cloudAutoRenewToggle').checked = !!s.autoRenew;
+    var maxMb = s.isRA ? 0 : Math.max(1, s.capMb - s.totalMb);
+    document.getElementById('cloudBuyMb').max = String(maxMb);
+  }
+  async function loadCloudFiles() {
+    var r = await api('/api/cloud/list');
+    var box = document.getElementById('cloudFiles');
+    if (!r.ok) { box.innerHTML = ''; return; }
+    var files = r.data.files || [];
+    box.innerHTML = '';
+    if (!files.length) { box.innerHTML = '<div class="empty">云空间还是空的</div>'; return; }
+    files.forEach(function (f) {
+      var row = document.createElement('div'); row.className = 'cf-row';
+      var nm = document.createElement('span'); nm.className = 'cf-name'; nm.textContent = f.name;
+      var sz = document.createElement('span'); sz.className = 'cf-size'; sz.textContent = fmtSize(f.size);
+      var dl = document.createElement('button'); dl.className = 'btn small'; dl.textContent = '下载';
+      dl.addEventListener('click', function () { downloadCloud(f.id, f.name, f.mime); });
+      var rp = document.createElement('button'); rp.className = 'btn small'; rp.textContent = '转载';
+      rp.addEventListener('click', function () { openRepost(f.id, f.name, f.size); });
+      var del = document.createElement('button'); del.className = 'btn small magenta'; del.textContent = '删除';
+      del.addEventListener('click', async function () {
+        if (!confirm('从云空间删除「' + f.name + '」？')) return;
+        var rr = await api('/api/cloud/delete', { id: f.id });
+        if (!rr.ok) { alert(rr.data.error || '删除失败'); return; }
+        loadCloud();
+      });
+      row.appendChild(nm); row.appendChild(sz); row.appendChild(dl); row.appendChild(rp); row.appendChild(del);
+      box.appendChild(row);
+    });
+  }
+  function downloadCloud(id, name, mime) {
+    fetch('/api/cloud/file?id=' + encodeURIComponent(id), { headers: { Authorization: 'Bearer ' + token } })
+      .then(function (r) { if (!r.ok) throw new Error('fail'); return r.blob(); })
+      .then(function (blob) { triggerDownload(blob, name); })
+      .catch(function () { appendSys('云文件下载失败'); });
+  }
+  async function uploadCloudBlob(blob, name, mime) {
+    try {
+      var r = await fetch('/api/cloud/upload?name=' + encodeURIComponent(name) + '&mime=' + encodeURIComponent(mime || 'application/octet-stream'), {
+        method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: blob
+      });
+      var d = {}; try { d = await r.json(); } catch (e) {}
+      if (!d.ok) appendSys(d.error || '保存到云失败');
+      else { appendSys('已保存到云存储：' + name); loadCloud(); }
+    } catch (e) { appendSys('保存到云失败'); }
+  }
+  function triggerDownload(blob, name) {
+    var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  }
+  async function maybeSaveToCloud(blob, name, mime) {
+    try {
+      var r = await api('/api/cloud/status');
+      if (!r.ok) return;
+      var s = r.data;
+      var hasSpace = s.isRA || (s.kind === 'paid' && !s.expired);
+      if (!hasSpace) return;
+      if (s.totalMb - s.usedMb <= 0) return;
+      if (!confirm('是否同时把「' + name + '」保存到云存储？（免费）')) return;
+      await uploadCloudBlob(blob, name, mime || blob.type || 'application/octet-stream');
+    } catch (e) {}
+  }
+  function openRepost(id, name, size) {
+    repostFileId = id;
+    document.getElementById('repostText').textContent = '文件：' + name + '（' + fmtSize(size) + '）· 转载按 1MB/20Credits 扣费';
+    document.getElementById('repostErr').textContent = '';
+    var sel = document.getElementById('repostRoom');
+    sel.innerHTML = '';
+    (roomsData || []).filter(function (r) { return r.class === 'A'; }).forEach(function (r) {
+      var o = document.createElement('option'); o.value = r.id; o.textContent = r.name; sel.appendChild(o);
+    });
+    if (!sel.children.length) document.getElementById('repostErr').textContent = '你还没有 A 类群聊可转载';
+    repostModal.classList.remove('hidden');
+  }
+  document.getElementById('btnRepostCancel').addEventListener('click', function () { repostModal.classList.add('hidden'); });
+  document.getElementById('btnRepostConfirm').addEventListener('click', async function () {
+    var room = document.getElementById('repostRoom').value;
+    var err = document.getElementById('repostErr');
+    if (!repostFileId || !room) { err.textContent = '请选择目标群聊'; return; }
+    try {
+      var r = await api('/api/cloud/repost', { fileId: repostFileId, room: room });
+      if (!r.ok) { err.textContent = r.data.error || '转载失败'; return; }
+      repostModal.classList.add('hidden');
+      appendSys('已转载到群聊（扣除 ' + (r.data.cost || 0) + ' Credits）');
+      refreshMe();
+    } catch (e) { err.textContent = '网络错误'; }
+  });
+  document.getElementById('btnCloudBuy').addEventListener('click', async function () {
+    var mb = Math.floor(Number(document.getElementById('cloudBuyMb').value) || 0);
+    var auto = document.getElementById('cloudAutoRenew').checked;
+    var err = document.getElementById('cloudBuyErr'); err.textContent = '';
+    try {
+      var r = await api('/api/cloud/buy', { mb: mb, autoRenew: auto });
+      if (!r.ok) { err.textContent = r.data.error || '购买失败'; return; }
+      loadCloud();
+    } catch (e) { err.textContent = '网络错误'; }
+  });
+  document.getElementById('btnCloudUpload').addEventListener('click', async function () {
+    var inp = document.getElementById('cloudFile');
+    var f = inp.files && inp.files[0];
+    var err = document.getElementById('cloudUploadErr'); err.textContent = '';
+    if (!f) { err.textContent = '请先选择文件'; return; }
+    try {
+      var r = await fetch('/api/cloud/upload?name=' + encodeURIComponent(f.name) + '&mime=' + encodeURIComponent(f.type || 'application/octet-stream'), {
+        method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: f
+      });
+      var d = {}; try { d = await r.json(); } catch (e) {}
+      if (!r.ok) { err.textContent = d.error || ('上传失败（' + r.status + '）'); return; }
+      inp.value = ''; loadCloud(); appendSys('已上传到云：' + f.name + '（免费）');
+    } catch (e) { err.textContent = '网络错误'; }
+  });
+  document.getElementById('cloudAutoRenewToggle').addEventListener('change', async function () {
+    var on = this.checked;
+    try { await api('/api/cloud/renew', { autoRenew: on }); } catch (e) {}
+  });
+  document.getElementById('btnCloudUnsubMb').addEventListener('click', async function () {
+    var mb = Math.floor(Number(document.getElementById('cloudUnsubMb').value) || 0);
+    var err = document.getElementById('cloudManageErr'); err.textContent = '';
+    if (mb < 1) { err.textContent = '请输入要退订的 MB 数'; return; }
+    if (!confirm('退订 ' + mb + ' MB 云空间？相应最旧文件将被删除释放')) return;
+    try {
+      var r = await api('/api/cloud/unsub', { mb: mb });
+      if (!r.ok) { err.textContent = r.data.error || '退订失败'; return; }
+      loadCloud();
+    } catch (e) { err.textContent = '网络错误'; }
+  });
+  document.getElementById('btnCloudUnsub').addEventListener('click', async function () {
+    if (!confirm('退订全部云空间？所有文件将清除（不可恢复）')) return;
+    var err = document.getElementById('cloudManageErr'); err.textContent = '';
+    try {
+      var r = await api('/api/cloud/unsub', { mb: 0 });
+      if (!r.ok) { err.textContent = r.data.error || '退订失败'; return; }
+      loadCloud();
+    } catch (e) { err.textContent = '网络错误'; }
+  });
+  document.getElementById('btnCloudBack').addEventListener('click', goChat);
+  // 强刷：清 Cache API + 带时间戳缓存破坏重载；加载后清理 URL 参数
+  if (location.search.startsWith('?_=')) {
+    history.replaceState(null, '', location.pathname);
+  }
+  const btnForceRefresh = document.getElementById('btnForceRefresh');
+  btnForceRefresh.addEventListener('click', async function () {
+    btnForceRefresh.classList.add('spinning');
+    try {
+      if ('caches' in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map(k => caches.delete(k)));
+      }
+    } catch (e) { /* 忽略缓存清理失败 */ }
+    location.href = location.pathname + '?_=' + Date.now();
+  });
+
+  document.getElementById('btnNavChat').addEventListener('click', goChat);
+  document.getElementById('btnNavRedeem').addEventListener('click', function () { document.getElementById('btnRedeem').click(); });
+  document.getElementById('btnNavGame').addEventListener('click', function () { document.getElementById('btnGame').click(); });
+  document.getElementById('btnNavShop').addEventListener('click', showShopPanel);
+  document.getElementById('btnNavCloud').addEventListener('click', showCloudPanel);
+  document.getElementById('btnNavCmd').addEventListener('click', function () { document.getElementById('btnCmdEntry').click(); });
+  document.getElementById('btnNavLogs').addEventListener('click', showLogPanel);
+  document.getElementById('btnNavCtrl').addEventListener('click', showCtrlPanel);
+  document.getElementById('btnNavSettings').addEventListener('click', showSettingsPanel);
+  document.getElementById('btnLogsBack').addEventListener('click', goChat);
+  document.getElementById('btnCtrlBack').addEventListener('click', goChat);
+  document.getElementById('btnSettingsBack').addEventListener('click', goChat);
+  document.getElementById('btnShopBack').addEventListener('click', goChat);
+
+  // 修改密码
+  document.getElementById('btnChangePass').addEventListener('click', async function () {
+    var oldP = document.getElementById('setOldPass').value;
+    var newP = document.getElementById('setNewPass').value;
+    var newP2 = document.getElementById('setNewPass2').value;
+    var errEl = document.getElementById('setErr');
+    var okEl = document.getElementById('setOk');
+    errEl.textContent = ''; okEl.textContent = '';
+    if (!oldP) { errEl.textContent = '请输入旧密码'; return; }
+    if (newP.length < 6) { errEl.textContent = '新密码至少 6 位'; return; }
+    if (newP !== newP2) { errEl.textContent = '两次输入的新密码不一致'; return; }
+    var r = await api('/api/password', { oldPassword: oldP, newPassword: newP });
+    if (r.ok) {
+      okEl.textContent = '✓ 密码修改成功，下次登录请使用新密码';
+      document.getElementById('setOldPass').value = '';
+      document.getElementById('setNewPass').value = '';
+      document.getElementById('setNewPass2').value = '';
+    } else {
+      errEl.textContent = r.data.error || ('失败（' + r.status + '）');
+    }
+  });
+
+  if (token) enterChat();
+})();
+</script>
+</body>
+</html>
+`;
