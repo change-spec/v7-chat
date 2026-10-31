@@ -7,7 +7,7 @@
 | 层 | 方案 |
 |---|---|
 | 实时层 | Cloudflare Durable Objects（单例房间枢纽 `Room`，SQLite 存储后端） |
-| 数据层 | Cloudflare D1（`chat-db`） |
+| 数据层 | Cloudflare D1（`v7-chat-db`） |
 | HTTP 层 | Cloudflare Pages（`_worker.js` Advanced Mode）+ esbuild 打包 |
 | 前端 | 单文件 HTML5（无构建框架，原生 JS + CSS） |
 | 鉴权 | PBKDF2-SHA256（100000 轮）密码哈希 + Bearer Token 会话 |
@@ -69,6 +69,20 @@ bash deploy-pages.sh
 > 因此 DO 类必须先部署在独立 Worker（`cloud-chat-do`）上，
 > Pages 再通过 `script_name` 绑定该已存在的命名空间。
 
+### 云存储容量与迁移到 R2
+
+云文件二进制当前存放在 D1 的 `cloud_file_chunks` 表（分片存储）。
+由于 **D1 单库上限为 10 GB（免费版仅 500 MB）且不可申请提升**，
+若要把云空间扩到 GB 级，需要把二进制迁到 Cloudflare R2：
+
+- D1 只保留元数据（`cloud_files` 行的 `storage` 字段标记 `r2` / `d1`）
+- 上传路径优先写 R2，R2 不可用时自动降级回 D1 分片（行为不变）
+- R2 免费额度 10 GB、**出站流量费 $0 永久**，适合"用户下载自己的文件"这类场景
+- 开通 R2 需要在 Cloudflare 面板绑定支付方式
+
+> 外部 S3 兼容存储（Backblaze B2 / AWS S3 等）无法被 Pages Worker 直接调用，
+> 需自行实现 SigV4 签名，故不作为备选方案。
+
 ## 端到端测试
 
 两个脚本均需在**干净的本地数据库**上运行（首个注册者自动成为 Root-Admin）：
@@ -80,6 +94,18 @@ node e2e_new_features.js                     # 权限 + 计费 + 注销级联（
 ```
 
 清理本地状态：停止 dev server 后删除 `.wrangler/state`。
+
+## 云端资源
+
+| 资源 | 名称 | 说明 |
+|---|---|---|
+| Pages 项目 | `v7-chat` | 对外访问入口 `https://v7-chat.pages.dev` |
+| DO 宿主 Worker | `cloud-chat-do` | Durable Object 类宿主，`workers_dev = false`（仅供绑定，不对外） |
+| D1 数据库 | `v7-chat-db` | 账号、消息、群组、云文件元数据 |
+
+**部署时 Pages 只认默认 `wrangler.toml`**（`pages deploy` 不支持 `-c` 指定其他路径），
+因此 `deploy-pages.sh` 会临时把 `wrangler.pages.toml` 覆盖到 `wrangler.toml`，
+部署完成后再还原为本地开发配置。
 
 ## 安全说明
 
