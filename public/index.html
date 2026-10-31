@@ -2924,7 +2924,7 @@
   function csRow(k, v) { return '<div class="cs-row"><span class="cs-k">' + k + '</span><span class="cs-v">' + v + '</span></div>'; }
   function renderCloud(s) {
     var box = document.getElementById('cloudStatusBox');
-    var typeLabel = s.isRA ? '免费永久（Root-Admin 专属 8GB）' : (s.kind === 'paid' ? '付费订阅' : (s.kind === 'none' ? '未开通' : s.kind));
+    var typeLabel = s.isRA ? '免费永久（Root-Admin 专属 1GB）' : (s.kind === 'paid' ? '付费订阅' : (s.kind === 'none' ? '未开通' : s.kind));
     var pct = s.totalMb > 0 ? Math.min(100, Math.round(s.usedMb / s.totalMb * 100)) : 0;
     var rows = '';
     rows += csRow('类型', typeLabel);

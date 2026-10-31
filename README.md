@@ -8,6 +8,7 @@
 |---|---|
 | 实时层 | Cloudflare Durable Objects（单例房间枢纽 `Room`，SQLite 存储后端） |
 | 数据层 | Cloudflare D1（`v7-chat-db`） |
+| 文件存储 | Supabase Storage（`cloud-files` 桶，私有） |
 | HTTP 层 | Cloudflare Pages（`_worker.js` Advanced Mode）+ esbuild 打包 |
 | 前端 | 单文件 HTML5（无构建框架，原生 JS + CSS） |
 | 鉴权 | PBKDF2-SHA256（100000 轮）密码哈希 + Bearer Token 会话 |
@@ -24,7 +25,7 @@
   - 文本：`max(10, ceil(字数/20) * 10)` Credits
   - 文件：`max(20, ceil(大小/1MB) * 20)` Credits
   - 文件传输助手中的收发**免费**（仅自己可见）
-- **云存储**：1190 Credits/MB/月，单账号上限 60MB；Root-Admin 免费 8GB 永久空间；上传/下载免费，转载按文件价计费
+- **云存储**：1190 Credits/MB/月，单账号上限 60MB；Root-Admin 免费 1GB 永久空间；上传/下载免费，转载按文件价计费
 - **文件服务**：服务端持久化 7 天，按 64KB 分块落库（`chat_file_chunks` / `cloud_file_chunks`）
 - **管理能力**：账号增删、OTP 兑换码、Credits 流水、系统日志、API Key 签发
 
@@ -69,19 +70,33 @@ bash deploy-pages.sh
 > 因此 DO 类必须先部署在独立 Worker（`cloud-chat-do`）上，
 > Pages 再通过 `script_name` 绑定该已存在的命名空间。
 
-### 云存储容量与迁移到 R2
+### 云存储后端（Supabase Storage）
 
-云文件二进制当前存放在 D1 的 `cloud_file_chunks` 表（分片存储）。
-由于 **D1 单库上限为 10 GB（免费版仅 500 MB）且不可申请提升**，
-若要把云空间扩到 GB 级，需要把二进制迁到 Cloudflare R2：
+云文件二进制存放在 **Supabase Storage**（桶 `cloud-files`，私有），D1 只保留元数据。
+选择理由：账号是 Workers 免费档，**D1 单库仅 500MB 且不可申请提升**，
+而 Supabase 免费档提供 1GB 文件存储 + 5GB 月出站流量，无需绑定支付方式。
 
-- D1 只保留元数据（`cloud_files` 行的 `storage` 字段标记 `r2` / `d1`）
-- 上传路径优先写 R2，R2 不可用时自动降级回 D1 分片（行为不变）
-- R2 免费额度 10 GB、**出站流量费 $0 永久**，适合"用户下载自己的文件"这类场景
-- 开通 R2 需要在 Cloudflare 面板绑定支付方式
+- D1 的 `cloud_files.storage` 字段标记后端：`supabase` / `d1`
+- 上传路径优先写 Supabase，失败时**自动降级**为 D1 分片（`cloud_file_chunks`），行为不变
+- 桶为**私有**，所有访问都经 Worker 中转并校验会话 —— Supabase key 只存在于 Worker secret
+- 单文件上限 20MB（bucket 级限制）
 
-> 外部 S3 兼容存储（Backblaze B2 / AWS S3 等）无法被 Pages Worker 直接调用，
-> 需自行实现 SigV4 签名，故不作为备选方案。
+**所需 secret**（用 `wrangler secret put` 注入，不进代码不进仓库）：
+
+| Secret | 值 |
+|---|---|
+| `SUPABASE_URL` | `https://<project>.supabase.co` |
+| `SUPABASE_SECRET` | 项目 API key（secret key，管理员权限） |
+| `SUPABASE_BUCKET` | `cloud-files` |
+
+两端都要注入（DO 宿主 Worker 与 Pages 各一份）：
+
+```bash
+wrangler secret put SUPABASE_SECRET -c wrangler.do.toml
+wrangler pages secret put SUPABASE_SECRET --project-name v7-chat
+```
+
+> Supabase 免费档项目**1 周无活动会被自动暂停**，届时文件服务需在面板手动恢复。
 
 ## 端到端测试
 

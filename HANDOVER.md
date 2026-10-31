@@ -39,6 +39,33 @@
 > 如果不需要 CI 自动部署，**这个 token 就不用建** —— 本地 `deploy-pages.sh` 用已登录的 wrangler 即可部署。
 > 建议：本地开发为主；CI 作为可选增强。
 
+### Supabase Storage（云文件后端）
+
+| 项 | 值 |
+|---|---|
+| Project URL | `https://kgsvvkzwmyalamvepirz.supabase.co` |
+| 项目 ID | `kgsvvkzwmyalamvepirz` |
+| Storage 桶 | `cloud-files`（**私有**，单文件上限 20MB） |
+| 区域 | 亚太地区 |
+| 套餐 | Free（1GB 文件存储 + 5GB/月出站） |
+| 密钥存放 | Cloudflare secret `SUPABASE_SECRET`（DO Worker 与 Pages 各注入一份） |
+| 密钥获取 | Supabase 面板 → 项目设置 → API Keys → Secret keys |
+
+> ⚠️ **Supabase 免费档项目 1 周无活动会被自动暂停**，届时文件服务需要在面板手动恢复。
+> 定期有人使用即可避免。
+
+**部署新环境时需要注入的 secret**（两端都要）：
+
+```bash
+wrangler secret put SUPABASE_SECRET -c wrangler.do.toml
+wrangler secret put SUPABASE_URL     -c wrangler.do.toml
+wrangler secret put SUPABASE_BUCKET  -c wrangler.do.toml
+wrangler pages secret put SUPABASE_SECRET --project-name v7-chat
+wrangler pages secret put SUPABASE_URL     --project-name v7-chat
+wrangler pages secret put SUPABASE_BUCKET  --project-name v7-chat
+```
+
+
 ## 三、日常部署
 
 ### 方式 A：本地手动部署（推荐，无需额外凭据）
@@ -109,12 +136,11 @@ v7-chat        (Pages)   ← 处理 HTTP + 静态资源，env.ROOM 指向 cloud-
 | `wrangler.do.toml` | DO 宿主 Worker 部署用（`-c wrangler.do.toml`） |
 | `wrangler.pages.toml` | Pages 部署用（需复制成 `wrangler.toml`） |
 
-### 5.4 云存储容量现状
-- 逻辑额度：RA 免费 **8192MB（8GB）** 永久，普通用户 1190 Credits/MB/月、单账号上限 60MB
-- **实际存储**：云文件二进制存在 D1 的 `cloud_file_chunks` 分片表（60KB base64/片）
-- **物理上限**：D1 单库 10GB（付费）/ 500MB（免费），**不可申请提升**
-- **要真存满 8GB 文件** → 必须把二进制迁到 R2（免费额度 10GB、出站费 $0）
-  迁移路径已写在 README「云存储容量与迁移到 R2」一节
+### 5.4 云存储后端（Supabase Storage）
+- 额度：RA 免费 **1024MB（1GB）** 永久，普通用户 1190 Credits/MB/月、单账号上限 60MB
+- **实际存储**：云文件二进制在 **Supabase Storage**（私有桶 `cloud-files`），D1 只存元数据
+- **降级路径**：Supabase 不可用时自动降级为 D1 分片（`cloud_file_chunks`）
+- Supabase 免费档：1GB 文件存储 + 5GB/月出站；**项目 1 周无活动会自动暂停**
 
 ### 5.5 计费公式
 ```
