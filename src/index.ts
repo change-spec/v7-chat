@@ -130,7 +130,7 @@ async function ensureRoomSchema(env: Env): Promise<void> {
   try {
     await env.DB.prepare("ALTER TABLE rooms ADD COLUMN passcode TEXT").run();
   } catch {}
-  // 群聊分类列 class：A=普通群（默认）/ B=与 Root-Admin 的私聊 / C=内置（公告群、文件传输助手）
+  // 群聊分类列 class：A=普通群（默认）/ B=与 Root-Admin 的私聊 / C=内置（公告群）
   try {
     await env.DB.prepare("ALTER TABLE rooms ADD COLUMN class TEXT").run();
     await env.DB.prepare("UPDATE rooms SET class = 'C' WHERE class IS NULL AND (type = 'builtin' OR type = 'file')").run();
@@ -165,10 +165,9 @@ async function purgeOldMessages(env: Env, force = false): Promise<void> {
   } catch {}
 }
 
-// 确保每个账号都拥有 Geek公告群 与 文件传输助手（自聊）两个内置会话
+// 确保每个账号都拥有 Geek公告群 内置会话
 async function ensureBuiltins(env: Env, username: string): Promise<void> {
   const now = new Date().toISOString();
-  const fileRoom = "file:" + username;
   await ensureRoomSchema(env);
   // B 类私聊：每个账号注册即与 Root-Admin 建立一条私聊（房主=该用户，名称=其用户名；用户视角显示 Root-Admin）
   const ra = await getRootAdmin(env);
@@ -178,11 +177,9 @@ async function ensureBuiltins(env: Env, username: string): Promise<void> {
       env.DB.prepare("INSERT OR IGNORE INTO rooms (id, name, type, creator, created_at, class) VALUES ('geek', 'Geek公告群', 'builtin', 'system', ?, 'C')").bind(now),
       // 兼容旧库：把历史名称统一改成 Geek公告群
       env.DB.prepare("UPDATE rooms SET name = 'Geek公告群' WHERE id = 'geek' AND name != 'Geek公告群'"),
-      env.DB.prepare("INSERT OR IGNORE INTO rooms (id, name, type, creator, created_at, class) VALUES (?, '文件传输助手', 'file', ?, ?, 'C')").bind(fileRoom, username, now),
       // 把当前所有账号都拉进 Geek公告群（全员可见，含观测者）
       env.DB.prepare("INSERT OR IGNORE INTO memberships (room, username, joined_at) SELECT 'geek', username, ? FROM accounts").bind(now),
       env.DB.prepare("INSERT OR IGNORE INTO memberships (room, username, joined_at) VALUES ('geek', ?, ?)").bind(username, now),
-      env.DB.prepare("INSERT OR IGNORE INTO memberships (room, username, joined_at) VALUES (?, ?, ?)").bind(fileRoom, username, now),
       env.DB.prepare("UPDATE messages SET room = 'geek' WHERE room = 'main'")
     ]);
   } catch {}
@@ -382,7 +379,7 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
 
   const role = isBootstrap ? "root-admin" : "member";
   await createAccount(env, username, password, role);
-  // 注册即与 Root-Admin 建立一条 B 类私聊（dm:<user>），并确保 Geek公告群 / 文件传输助手存在
+  // 注册即与 Root-Admin 建立一条 B 类私聊（dm:<user>），并确保 Geek公告群存在
   await ensureBuiltins(env, username);
   const token = await issueSession(env, username);
   return json({ token, username, role });
@@ -1140,7 +1137,7 @@ async function handleFileQuote(request: Request, env: Env): Promise<Response> {
   try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
   const size = Math.max(0, Number(body.size) || 0);
   const room = (body.room || "").trim();
-  const free = room === "file:" + user.username || (room === "geek" && user.role === "root-admin");
+  const free = room === "geek" && user.role === "root-admin";
   const cost = free ? 0 : fileFee(size);
   const row = await env.DB.prepare("SELECT points FROM accounts WHERE username = ?").bind(user.username).first<{ points: number }>();
   const balance = row ? row.points : 0;
@@ -1171,8 +1168,8 @@ async function handleFilePay(request: Request, env: Env): Promise<Response> {
   const size = Math.max(0, Number(body.size) || 0);
   const cost = fileFee(size);
   const room = (body.room || "").trim();
-  // 免费仅两处：公告群里 Root-Admin 下载、文件传输助手（file:<自己>）自取
-  const freeRoom = (room === "geek" && user.role === "root-admin") || room === "file:" + user.username;
+  // 免费仅两处：公告群里 Root-Admin 下载、自己发送的文件
+  const freeRoom = room === "geek" && user.role === "root-admin";
   if (freeRoom) return json({ ok: true, cost: 0, free: true });
   if (!(await spendCredits(env, user.username, cost))) {
     return json({ error: "Credits 不足：下载该文件需 " + cost + " Credits（1MB/20Credits，" + fmtBytes(size) + "）" }, 402);
@@ -1182,7 +1179,7 @@ async function handleFilePay(request: Request, env: Env): Promise<Response> {
 }
 
 // 聊天文件下载：从 chat_files 取回字节（与文件消息历史一一对应，保留 7 天）
-// 免费：文件传输助手自取、公告群 Root-Admin、文件发送者本人；其余成员需已通过 /api/file/pay 扣费
+// 免费：公告群 Root-Admin、文件发送者本人；其余成员需已通过 /api/file/pay 扣费
 async function handleFileGet(request: Request, env: Env): Promise<Response> {
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
@@ -1192,7 +1189,7 @@ async function handleFileGet(request: Request, env: Env): Promise<Response> {
   }>();
   if (!f) return json({ error: "文件不存在或已过期（聊天文件仅保留 7 天）" }, 404);
   const room = f.room;
-  const free = room === "file:" + user.username || (room === "geek" && user.role === "root-admin") || f.sender === user.username;
+  const free = (room === "geek" && user.role === "root-admin") || f.sender === user.username;
   const member = free || (await isMember(env.DB, room, user.username));
   if (!member) return json({ error: "你不是该房间成员，无权下载此文件" }, 403);
   let bytes: Uint8Array;
@@ -1294,7 +1291,7 @@ async function handleCloudStatus(request: Request, env: Env): Promise<Response> 
 async function handleCloudBuy(request: Request, env: Env): Promise<Response> {
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
-  if (user.role === "root-admin") return json({ error: "Root-Admin 已免费拥有 1GB（1024MB）永久云空间，无需购买" }, 400);
+  if (user.role === "root-admin") return json({ error: "Root-Admin 已免费拥有永久云空间，无需购买" }, 400);
   let body: { mb?: number; autoRenew?: boolean };
   try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
   const mb = Math.floor(Number(body.mb) || 0);
@@ -1522,7 +1519,7 @@ async function handleCloudUpload(request: Request, env: Env): Promise<Response> 
   let quotaMb = 0;
   if (isRA) quotaMb = RA_CLOUD_MB;
   else { const sub = await getCloudSub(env, user.username); quotaMb = sub ? sub.total_mb : 0; }
-  if (quotaMb <= 0) return json({ error: "你还没有云空间，请先购买（Root-Admin 免费 1GB 永久）" }, 409);
+  if (quotaMb <= 0) return json({ error: "你还没有云空间，请先购买" }, 409);
   const used = await sumCloudUsed(env, user.username);
   const quotaBytes = quotaMb * 1024 * 1024;
   if (used + size > quotaBytes) {
@@ -1969,7 +1966,7 @@ export class Room {
       return;
     }
 
-      // 文件传输：非成员禁发；公告群仅 RA 可发；观测者仅可在自己的文件传输助手（file:<用户名>）里发；仅广播给同房
+      // 文件传输：非成员禁发；公告群仅 RA 可发；观测者仅可在与 RA 的私聊里发；仅广播给同房
       if (typeof data.type === "string" && data.type.indexOf("file-") === 0) {
         const room = this.roomOf.get(ws) || "";
         if (!room || !(await isMember(this.env.DB, room, user.username))) {
@@ -1980,14 +1977,14 @@ export class Room {
           this.sendTo(ws, { type: "sys", text: "Geek公告群仅 Root-Admin 可发布内容" });
           return;
         }
-        if (user.role === "observer" && room !== "file:" + user.username && room !== "dm:" + user.username) {
-          this.sendTo(ws, { type: "sys", text: "观测者只能在「文件传输助手」和「与 Root-Admin 的私聊」里发文件" });
+        if (user.role === "observer" && room !== "dm:" + user.username) {
+          this.sendTo(ws, { type: "sys", text: "观测者只能在「与 Root-Admin 的私聊」里发文件" });
           return;
         }
         const size = Math.max(0, Number(data.size) || 0);
-        const freeRoom = room === "file:" + user.username || (room === "geek" && user.role === "root-admin");
+        const freeRoom = room === "geek" && user.role === "root-admin";
         // 文件上传计费：统一 1MB / 20 Credits（向上取整，至少 20）；
-        // 仅两处免费：公告群里 Root-Admin 发布、文件传输助手（file:<自己>）自传；其余一切房间都扣费
+        // 唯一免费场景：公告群里 Root-Admin 发布；其余一切房间都扣费
         if (data.type === "file-start" && !freeRoom) {
           const cost = fileFee(size);
           if (!(await spendCredits(this.env, user.username, cost))) {
@@ -2069,14 +2066,14 @@ export class Room {
       return;
     }
 
-    // 观测者只能围观，例外：自己的文件传输助手（file:<用户名>）和与 Root-Admin 的私聊（dm:<用户名>）里可以发言
-    if (user.role === "observer" && room !== "file:" + user.username && room !== "dm:" + user.username) {
-      this.sendTo(ws, { type: "sys", text: "观测者只能围观，仅可在「文件传输助手」和「与 Root-Admin 的私聊」里发言" });
+    // 观测者只能围观，例外：与 Root-Admin 的私聊（dm:<用户名>）里可以发言
+    if (user.role === "observer" && room !== "dm:" + user.username) {
+      this.sendTo(ws, { type: "sys", text: "观测者只能围观，仅可在「与 Root-Admin 的私聊」里发言" });
       return;
     }
 
     // 禁言检查：群主/Admin 可对普通成员禁言 1-24 小时，中途不能结束（Geek公告群无需禁言）
-    if (room !== "geek" && room !== "file:" + user.username) {
+    if (room !== "geek") {
       const mute = await this.env.DB.prepare("SELECT until FROM room_mutes WHERE room = ? AND username = ?")
         .bind(room, user.username).first<{ until: string }>();
       if (mute) {
@@ -2089,8 +2086,8 @@ export class Room {
     }
 
     // 发言计费：公告群仅 Root-Admin 可发（免费）；其它群 20 字 / 10 Credits（向上取整至少 10）；
-    // 所有人都扣（含 Root-Admin），唯一例外是文件传输助手（file:<自己>）自聊
-    if (room !== "geek" && room !== "file:" + user.username) {
+    // 所有人都扣（含 Root-Admin），唯一例外是 Geek 公告群（仅 Root-Admin 可发，免费）
+    if (room !== "geek") {
       const cost = textFee(text);
       if (!(await spendCredits(this.env, user.username, cost))) {
         this.sendTo(ws, { type: "sys", text: "Credits 不足：本房间发言需 " + cost + " Credits（20 字/10Credits，本条 " + text.length + " 字）" });

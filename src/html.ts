@@ -478,7 +478,6 @@ export const html = `<!DOCTYPE html>
       <div class="p-value" id="pts">0</div>
     </div>
     <div class="side-foot">
-      消息经 <b>WebSocket</b> 实时广播<br>
       <b>多设备</b>：手机/电脑/iPad 同网址登录同步
     </div>
   </aside>
@@ -1037,23 +1036,20 @@ export const html = `<!DOCTYPE html>
     measure();
   }
 
-  // 输入框按房间/身份自适应：观测者仅文件传输助手可发言；公告群仅 Root-Admin 可发言；
-  // 计费提示：其它群发言 20 字/10Credits，文件上传/下载 1MB/20Credits（RA 与文件传输助手免费）
+  // 输入框按房间/身份自适应：观测者仅与 Root-Admin 的私聊可发言；公告群仅 Root-Admin 可发言；
+  // 计费提示：其它群发言 20 字/10Credits，文件上传/下载 1MB/20Credits（公告群 Root-Admin 免费）
   function applyRoomInput() {
-    var inHelper = currentRoom === 'file:' + me;
-    var charged = !!currentRoom && currentRoom !== 'geek' && !inHelper;
+    var charged = !!currentRoom && currentRoom !== 'geek';
     var chargeHint = ' · 本房发言 20 字/10Credits · 文件 1MB/20Credits';
     if (meRole === 'observer') {
-      var canSpeakObs = inHelper || currentRoom === 'dm:' + me;
+      var canSpeakObs = currentRoom === 'dm:' + me;
       msgInput.disabled = !canSpeakObs;
       btnSend.disabled = !canSpeakObs;
       btnFile.disabled = !canSpeakObs;
-      if (inHelper) {
-        msgInput.placeholder = '发送给自己 · 仅自己可见（免费）';
-      } else if (currentRoom === 'dm:' + me) {
+      if (currentRoom === 'dm:' + me) {
         msgInput.placeholder = '与 Root-Admin 私聊 · 正常计费';
       } else {
-        msgInput.placeholder = '观测者只能围观，仅文件传输助手 / 与 Root-Admin 私聊可发言';
+        msgInput.placeholder = '观测者只能围观，仅与 Root-Admin 私聊可发言';
       }
       btnFile.title = '发送文件（≤' + fmtSize(MAX_FILE) + '）';
       return;
@@ -1361,7 +1357,7 @@ export const html = `<!DOCTYPE html>
     autoGrowInput();
     msgInput.focus();
     // 计费房间发言后刷新余额显示（实际扣费以服务端为准）
-    if (currentRoom && currentRoom !== 'geek' && currentRoom !== 'file:' + me) {
+    if (currentRoom && currentRoom !== 'geek') {
       refreshMe();
     }
   }
@@ -1381,7 +1377,7 @@ export const html = `<!DOCTYPE html>
   // 字数上限视 Credits 而定：20 字/10Credits = 2 字/Credits，最高 1000（至少 20 字）
   function applyInputLimit() {
     var pts = parseInt(document.getElementById('pts').textContent, 10) || 0;
-    var limit = currentRoom && currentRoom !== 'geek' && currentRoom !== 'file:' + me
+    var limit = currentRoom && currentRoom !== 'geek'
       ? Math.min(1000, Math.max(20, pts * 2))
       : 1000;
     msgInput.setAttribute('maxlength', String(limit));
@@ -2328,9 +2324,9 @@ export const html = `<!DOCTYPE html>
     var prog = div.querySelector('.f-progress');
     if (prog) prog.remove();
     var card = div.querySelector('.file-card');
-    // 免费仅：自己的文件、公告群里 Root-Admin 下载、文件传输助手里自取；其余全部付费（1MB/20Credits）
+    // 免费仅：自己的文件、公告群里 Root-Admin 下载；其余全部付费（1MB/20Credits）
     var fileRoom = currentRoom;
-    var freeRoom = free || (fileRoom === 'geek' && meRole === 'root-admin') || fileRoom === 'file:' + me;
+    var freeRoom = free || (fileRoom === 'geek' && meRole === 'root-admin');
     if (freeRoom) {
       var dl = document.createElement('a');
       dl.className = 'f-dl';
@@ -2433,7 +2429,7 @@ export const html = `<!DOCTYPE html>
       return;
     }
     if (!currentRoom) { appendSys('请先进入一个房间再发送文件'); return; }
-    // 费用报价（与服务端同一套规则）：文件传输助手 / 公告群 RA 免费，其余 1MB/20Credits
+    // 费用报价（与服务端同一套规则）：公告群 RA 免费，其余 1MB/20Credits
     var quote = { cost: 0, free: true, balance: 0, enough: true };
     try {
       var qr = await api('/api/file/quote', { size: f.size, room: currentRoom });
@@ -2505,7 +2501,7 @@ export const html = `<!DOCTYPE html>
     roomsData.forEach(function (rm) {
       var item = document.createElement('div');
       item.className = 'room-item' + (rm.id === currentRoom ? ' active' : '');
-      var icon = rm.type === 'builtin' ? '👥' : rm.type === 'file' ? '📁' : '＃';
+      var icon = rm.type === 'builtin' ? '👥' : '＃';
       var ic = document.createElement('span'); ic.className = 'ri-icon'; ic.textContent = icon;
       var name = document.createElement('span'); name.className = 'ri-name'; name.textContent = rm.name;
       var badge = document.createElement('span');
@@ -2523,8 +2519,8 @@ export const html = `<!DOCTYPE html>
     for (var i = 0; i < roomsData.length; i++) { if (roomsData[i].id === id) found = roomsData[i]; }
     var rn = document.getElementById('chatRoomName');
     if (rn) rn.textContent = found ? found.name : id;
-    // 文件传输助手（私聊自用）没有群设置
-    document.getElementById('btnConvSettings').classList.toggle('hidden', !!found && found.type === 'file');
+    // 内置会话（公告群）没有群设置
+    document.getElementById('btnConvSettings').classList.toggle('hidden', !!found && found.type === 'builtin');
     renderRoomList();
     showChatPage('conv');
     applyRoomInput();
@@ -2924,7 +2920,7 @@ export const html = `<!DOCTYPE html>
   function csRow(k, v) { return '<div class="cs-row"><span class="cs-k">' + k + '</span><span class="cs-v">' + v + '</span></div>'; }
   function renderCloud(s) {
     var box = document.getElementById('cloudStatusBox');
-    var typeLabel = s.isRA ? '免费永久（Root-Admin 专属 1GB）' : (s.kind === 'paid' ? '付费订阅' : (s.kind === 'none' ? '未开通' : s.kind));
+    var typeLabel = s.isRA ? '免费永久' : (s.kind === 'paid' ? '付费订阅' : (s.kind === 'none' ? '未开通' : s.kind));
     var pct = s.totalMb > 0 ? Math.min(100, Math.round(s.usedMb / s.totalMb * 100)) : 0;
     var rows = '';
     rows += csRow('类型', typeLabel);
