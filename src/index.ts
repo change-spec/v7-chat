@@ -566,9 +566,6 @@ async function ensureSchema(env: Env): Promise<void> {
         storage TEXT NOT NULL DEFAULT 'd1',
         created_at TEXT NOT NULL
       )`),
-      // 旧库补列：storage（supabase = 二进制在 Supabase Storage；d1 = 在 cloud_file_chunks 分片里）
-      env.DB.prepare("ALTER TABLE cloud_files ADD COLUMN storage TEXT").run(),
-      env.DB.prepare("UPDATE cloud_files SET storage = 'd1' WHERE storage IS NULL").run(),
       // 云文件分块存储：单文件可能很大，避免整段塞进单个单元格超出 D1 上限；下载时按 seq 拼回
       env.DB.prepare(`CREATE TABLE IF NOT EXISTS cloud_file_chunks (
         file_id TEXT NOT NULL,
@@ -595,6 +592,10 @@ async function ensureSchema(env: Env): Promise<void> {
         PRIMARY KEY (file_id, seq)
       )`)
     ]);
+    // 旧库补列：单独执行，避免 ALTER 失败导致整个 batch 回滚（导致表建不出来）
+    // storage（supabase = 二进制在 Supabase Storage；d1 = 在 cloud_file_chunks 分片里）
+    try { await env.DB.prepare("ALTER TABLE cloud_files ADD COLUMN storage TEXT").run(); } catch {}
+    try { await env.DB.prepare("UPDATE cloud_files SET storage = 'd1' WHERE storage IS NULL").run(); } catch {}
   } catch {}
 }
 
@@ -662,14 +663,22 @@ async function handleMe(request: Request, env: Env): Promise<Response> {
   return json({ username: user.username, role: user.role, points: row ? row.points : 0, salary: salary });
 }
 
-async function handleHistory(env: Env): Promise<Response> {
+// 聊天历史：必须登录（历史上未鉴权，任何人都能读取全部聊天记录）
+async function handleHistory(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
   const { results } = await env.DB.prepare(
     "SELECT sender, role, text, ts FROM messages WHERE room = ? ORDER BY id DESC LIMIT 100"
   ).bind("main").all<{ sender: string; role: string; text: string; ts: string }>();
   return json({ messages: (results || []).reverse() });
 }
 
-async function handleAccounts(env: Env): Promise<Response> {
+// 管理后台账号列表：仅 Root-Admin 可访问
+// （历史上此接口未鉴权，导致任何人都能拉取全部账号的用户名/角色/积分/注册时间）
+async function handleAccounts(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  if (user.role !== "root-admin") return json({ error: "仅 Root-Admin 可查看账号列表" }, 403);
   const { results } = await env.DB.prepare(
     "SELECT username, role, points, created_at FROM accounts ORDER BY created_at"
   ).all<{ username: string; role: string; points: number; created_at: string }>();
@@ -705,13 +714,17 @@ async function handleCreateOtp(request: Request, env: Env): Promise<Response> {
   return json({ ok: true, code, amount, days });
 }
 
-async function handleListOtps(env: Env): Promise<Response> {
+// 兑换码列表：仅 Root-Admin 可访问，且不下发完整兑换码明文
+// （历史上此接口未鉴权且返回 fullCode，任何人都能拿到未使用的兑换码直接兑换 Credits）
+async function handleListOtps(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  if (user.role !== "root-admin") return json({ error: "仅 Root-Admin 可查看兑换码" }, 403);
   const { results } = await env.DB.prepare(
     "SELECT code, amount, created_by, expires_at, created_at FROM otps WHERE used_by IS NULL ORDER BY created_at DESC LIMIT 50"
   ).all<{ code: string; amount: number; created_by: string; expires_at: string | null; created_at: string }>();
   const now = Date.now();
   const masked = (results || []).map((r) => ({
-    fullCode: r.code,
     code: r.code.slice(0, 4) + "••••••••••••••••••••••••" + r.code.slice(-4),
     amount: r.amount,
     created_by: r.created_by,
@@ -732,8 +745,22 @@ async function handleRevokeOtp(request: Request, env: Env): Promise<Response> {
   } catch {
     return json({ error: "请求格式错误" }, 400);
   }
-  const code = (body.code || "").trim();
-  if (!code) return json({ error: "缺少兑换码" }, 400);
+  const raw = (body.code || "").trim();
+  if (!raw) return json({ error: "缺少兑换码" }, 400);
+
+  // 支持两种形式：
+  // 1) 完整兑换码（兼容旧调用）
+  // 2) 掩码形式（前 4 位 + 掩码串 + 后 4 位）—— 服务端反查匹配项，
+  //    前端因此永远拿不到兑换码明文（避免管理端把明文暴露在浏览器里）
+  let code = raw;
+  if (raw.indexOf("•") >= 0) {
+    const { results } = await env.DB.prepare("SELECT code FROM otps WHERE used_by IS NULL").all<{ code: string }>();
+    const maskOf = (c: string) => c.slice(0, 4) + "••••••••••••••••••••••••" + c.slice(-4);
+    const hit = (results || []).find((r) => maskOf(r.code) === raw);
+    if (!hit) return json({ error: "兑换码不存在或已失效" }, 404);
+    code = hit.code;
+  }
+
   const row = await env.DB.prepare("SELECT used_by FROM otps WHERE code = ?").bind(code).first<{ used_by: string | null }>();
   if (!row) return json({ error: "兑换码不存在" }, 404);
   if (row.used_by) return json({ error: "已使用的兑换码不可撤销" }, 409);
@@ -1393,7 +1420,18 @@ async function handleCloudFile(request: Request, env: Env): Promise<Response> {
   if (!f) return json({ error: "文件不存在或不属于你" }, 404);
   const bytes = await loadCloudBytes(env, id, f.storage);
   if (!bytes) return json({ error: "文件数据已丢失" }, 410);
-  return json({ id: f.id, name: f.name, size: f.size, mime: f.mime, data: bytesToBase64(bytes) });
+  // 直接返回原始二进制。
+  // 早期版本这里返回 JSON {id,name,size,mime,data(base64)}，而前端下载用的是
+  // r.blob() —— 浏览器会把整段 JSON 当成文件内容保存，于是图片/视频/Word 全部损坏。
+  const safeName = (f.name || "file").replace(/[\r\n"]/g, "_");
+  return new Response(bytes as unknown as BodyInit, {
+    headers: {
+      "content-type": f.mime || "application/octet-stream",
+      "content-disposition": "attachment; filename=\"" + encodeURIComponent(safeName) + "\"; filename*=UTF-8''" + encodeURIComponent(safeName),
+      "content-length": String(bytes.length),
+      "cache-control": "no-store"
+    }
+  });
 }
 
 // 取云文件全部字节（base64）：供「转载到群」等场景复用
@@ -1752,12 +1790,12 @@ export default {
     if (url.pathname === "/api/login" && request.method === "POST") return handleLogin(request, env);
     if (url.pathname === "/api/password" && request.method === "POST") return handlePasswordChange(request, env);
     if (url.pathname === "/api/me" && request.method === "GET") return handleMe(request, env);
-    if (url.pathname === "/api/history" && request.method === "GET") return handleHistory(env);
+    if (url.pathname === "/api/history" && request.method === "GET") return handleHistory(request, env);
     if (url.pathname === "/api/admin/create-account" && request.method === "POST") return handleAdminCreate(request, env);
     if (url.pathname === "/api/admin/deactivate" && request.method === "POST") return handleDeactivate(request, env);
-    if (url.pathname === "/api/admin/accounts" && request.method === "GET") return handleAccounts(env);
+    if (url.pathname === "/api/admin/accounts" && request.method === "GET") return handleAccounts(request, env);
     if (url.pathname === "/api/admin/create-otp" && request.method === "POST") return handleCreateOtp(request, env);
-    if (url.pathname === "/api/admin/otps" && request.method === "GET") return handleListOtps(env);
+    if (url.pathname === "/api/admin/otps" && request.method === "GET") return handleListOtps(request, env);
     if (url.pathname === "/api/otp/redeem" && request.method === "POST") return handleRedeemOtp(request, env);
     if (url.pathname === "/api/otp/revoke" && request.method === "POST") return handleRevokeOtp(request, env);
     if (url.pathname === "/api/apikey/bind" && request.method === "POST") return handleApiKeyBind(request, env);

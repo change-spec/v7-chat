@@ -2106,7 +2106,7 @@ export const html = `<!DOCTYPE html>
         btn.style.flexShrink = '0';
         btn.addEventListener('click', async function () {
           btn.disabled = true;
-          var rr = await api('/api/otp/revoke', { code: o.fullCode });
+          var rr = await api('/api/otp/revoke', { code: o.code });
           if (rr.ok) {
             loadOtps();
             appendSys('兑换码已撤销');
@@ -2924,7 +2924,7 @@ export const html = `<!DOCTYPE html>
   function csRow(k, v) { return '<div class="cs-row"><span class="cs-k">' + k + '</span><span class="cs-v">' + v + '</span></div>'; }
   function renderCloud(s) {
     var box = document.getElementById('cloudStatusBox');
-    var typeLabel = s.isRA ? '免费永久（Root-Admin 专属 8GB）' : (s.kind === 'paid' ? '付费订阅' : (s.kind === 'none' ? '未开通' : s.kind));
+    var typeLabel = s.isRA ? '免费永久（Root-Admin 专属 1GB）' : (s.kind === 'paid' ? '付费订阅' : (s.kind === 'none' ? '未开通' : s.kind));
     var pct = s.totalMb > 0 ? Math.min(100, Math.round(s.usedMb / s.totalMb * 100)) : 0;
     var rows = '';
     rows += csRow('类型', typeLabel);
@@ -2972,10 +2972,18 @@ export const html = `<!DOCTYPE html>
     });
   }
   function downloadCloud(id, name, mime) {
+    // 后端直接返回原始二进制（不是 JSON），r.blob() 拿到的就是文件本体
     fetch('/api/cloud/file?id=' + encodeURIComponent(id), { headers: { Authorization: 'Bearer ' + token } })
-      .then(function (r) { if (!r.ok) throw new Error('fail'); return r.blob(); })
+      .then(function (r) {
+        if (!r.ok) {
+          return r.json().catch(function () { return {}; }).then(function (e) {
+            throw new Error(e.error || ('下载失败（HTTP ' + r.status + '）'));
+          });
+        }
+        return r.blob();
+      })
       .then(function (blob) { triggerDownload(blob, name); })
-      .catch(function () { appendSys('云文件下载失败'); });
+      .catch(function (e) { appendSys('云文件下载失败：' + (e && e.message ? e.message : '未知错误')); });
   }
   async function uploadCloudBlob(blob, name, mime) {
     try {

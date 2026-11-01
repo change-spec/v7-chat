@@ -2106,7 +2106,7 @@
         btn.style.flexShrink = '0';
         btn.addEventListener('click', async function () {
           btn.disabled = true;
-          var rr = await api('/api/otp/revoke', { code: o.fullCode });
+          var rr = await api('/api/otp/revoke', { code: o.code });
           if (rr.ok) {
             loadOtps();
             appendSys('兑换码已撤销');
@@ -2972,10 +2972,18 @@
     });
   }
   function downloadCloud(id, name, mime) {
+    // 后端直接返回原始二进制（不是 JSON），r.blob() 拿到的就是文件本体
     fetch('/api/cloud/file?id=' + encodeURIComponent(id), { headers: { Authorization: 'Bearer ' + token } })
-      .then(function (r) { if (!r.ok) throw new Error('fail'); return r.blob(); })
+      .then(function (r) {
+        if (!r.ok) {
+          return r.json().catch(function () { return {}; }).then(function (e) {
+            throw new Error(e.error || ('下载失败（HTTP ' + r.status + '）'));
+          });
+        }
+        return r.blob();
+      })
       .then(function (blob) { triggerDownload(blob, name); })
-      .catch(function () { appendSys('云文件下载失败'); });
+      .catch(function (e) { appendSys('云文件下载失败：' + (e && e.message ? e.message : '未知错误')); });
   }
   async function uploadCloudBlob(blob, name, mime) {
     try {
