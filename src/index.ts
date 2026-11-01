@@ -148,21 +148,56 @@ async function ensureRoomSchema(env: Env): Promise<void> {
   } catch {}
 }
 
-// 消息与聊天文件统一保留 7 天：过期自动清除，避免挤占云存储
-const MSG_RETENTION_MS = 7 * 24 * 3600 * 1000;
+// 消息与聊天文件按房间分级保留，过期自动清除，避免挤占云存储
+//   C 类（Geek公告群等内置房）：21 天
+//   B 类（与 Root-Admin 的私聊）：7 天
+//   A 类（普通群）：5 天
+const RETENTION_C_MS = 21 * 24 * 3600 * 1000;
+const RETENTION_B_MS = 7 * 24 * 3600 * 1000;
+const RETENTION_A_MS = 5 * 24 * 3600 * 1000;
+const MSG_RETENTION_MS = RETENTION_B_MS; // 默认保留期（B 类），用于历史查询兜底
 const CHAT_FILE_CAP = 20 * 1024 * 1024; // 单文件落地上限 20MB（更大文件仅实时转发，不入库）
 let lastPurgeAt = 0;
+
+// 按房间 class 计算该房间的保留截止时间
+async function roomRetentionCutoff(env: Env, room: string): Promise<string> {
+  const row = await env.DB.prepare("SELECT class FROM rooms WHERE id = ?").bind(room)
+    .first<{ class: string | null }>();
+  const cls = row && row.class ? row.class : "A";
+  const ms = cls === "C" ? RETENTION_C_MS : cls === "B" ? RETENTION_B_MS : RETENTION_A_MS;
+  return new Date(Date.now() - ms).toISOString();
+}
+
+// 分级清理：按 rooms.class 分别用不同 cutoff 删除
 async function purgeOldMessages(env: Env, force = false): Promise<void> {
   const now = Date.now();
-  if (!force && now - lastPurgeAt < 60 * 1000) return; // 节流：60 秒最多一次
+  if (!force && now - lastPurgeAt < 20 * 1000) return; // 节流：20 秒最多一次（force 可绕过）
   lastPurgeAt = now;
-  const cutoff = new Date(now - MSG_RETENTION_MS).toISOString();
+  const nowIso = new Date(now).toISOString();
+  const cutC = new Date(now - RETENTION_C_MS).toISOString();
+  const cutB = new Date(now - RETENTION_B_MS).toISOString();
+  const cutA = new Date(now - RETENTION_A_MS).toISOString();
   try {
-    await env.DB.batch([
-      env.DB.prepare("DELETE FROM messages WHERE ts < ?").bind(cutoff),
-      env.DB.prepare("DELETE FROM chat_files WHERE created_at < ?").bind(cutoff)
-    ]);
+    // 消息：按房间 class 用不同 cutoff
+    await env.DB.prepare(
+      "DELETE FROM messages WHERE ts < CASE " +
+      "WHEN (SELECT class FROM rooms WHERE id = messages.room) = 'C' THEN ? " +
+      "WHEN (SELECT class FROM rooms WHERE id = messages.room) = 'B' THEN ? " +
+      "ELSE ? END"
+    ).bind(cutC, cutB, cutA).run();
+    // 聊天文件：同规则
+    await env.DB.prepare(
+      "DELETE FROM chat_files WHERE created_at < CASE " +
+      "WHEN (SELECT class FROM rooms WHERE id = chat_files.room) = 'C' THEN ? " +
+      "WHEN (SELECT class FROM rooms WHERE id = chat_files.room) = 'B' THEN ? " +
+      "ELSE ? END"
+    ).bind(cutC, cutB, cutA).run();
+    // 分片表：清理已无对应 chat_files 的孤儿分片
+    await env.DB.prepare(
+      "DELETE FROM chat_file_chunks WHERE file_id NOT IN (SELECT id FROM chat_files)"
+    ).run();
   } catch {}
+  void nowIso;
 }
 
 // 确保每个账号都拥有 Geek公告群 内置会话
@@ -292,9 +327,11 @@ async function handleRoomHistory(request: Request, env: Env): Promise<Response> 
   const id = (new URL(request.url).searchParams.get("id") || "").trim();
   if (!id) return json({ error: "缺少房间" }, 400);
   if (!(await isMember(env.DB, id, user.username))) return json({ error: "你不是该房间成员" }, 403);
+  // 按房间 class 用对应保留期：C 类 21 天 / B 类 7 天 / A 类 5 天
+  const cut = await roomRetentionCutoff(env, id);
   const { results } = await env.DB.prepare(
     "SELECT sender, role, text, ts FROM messages WHERE room = ? AND ts >= ? ORDER BY id DESC LIMIT 200"
-  ).bind(id, new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString()).all<{ sender: string; role: string; text: string; ts: string }>();
+  ).bind(id, cut).all<{ sender: string; role: string; text: string; ts: string }>();
   return json({ messages: (results || []).reverse() });
 }
 
@@ -523,6 +560,22 @@ async function ensureSchema(env: Env): Promise<void> {
         data TEXT NOT NULL,
         PRIMARY KEY (file_id, seq)
       )`),
+      // 商店成交记录：商品本身成交即删除，这里留档供买卖双方查询历史
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS market_orders (
+        id TEXT PRIMARY KEY,
+        item_id TEXT NOT NULL,
+        seller TEXT NOT NULL,
+        buyer TEXT NOT NULL,
+        name TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        mime TEXT,
+        price INTEGER NOT NULL,
+        fee INTEGER NOT NULL,
+        payout INTEGER NOT NULL,
+        delivered_id TEXT,
+        deliver TEXT,
+        created_at TEXT NOT NULL
+      )`),
       env.DB.prepare(`CREATE TABLE IF NOT EXISTS admin_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         admin TEXT NOT NULL,
@@ -617,6 +670,8 @@ async function ensureSchema(env: Env): Promise<void> {
     // otps.expires_at：兑换码有效期。旧库建表时没有这列，
     // 而 handleCreateOtp 要写入它 → Workers 抛未捕获异常 → 接口返回 "error code: 1101"。
     try { await env.DB.prepare("ALTER TABLE otps ADD COLUMN expires_at TEXT").run(); } catch {}
+    // market_orders.deliver：成交后买家的接收方式（cloud / download），旧库补列
+    try { await env.DB.prepare("ALTER TABLE market_orders ADD COLUMN deliver TEXT").run(); } catch {}
   } catch {}
 }
 
@@ -687,6 +742,9 @@ async function handleMe(request: Request, env: Env): Promise<Response> {
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
   const salary = await ensureDailySalary(env, user);
+  // 分级保留期清理：C 类 21 天 / B 类 7 天 / A 类 5 天
+  // /api/me 是前端登录后必调的接口，用作主动清理触发点（不活跃房间的过期消息也能被清）
+  void purgeOldMessages(env);
   const row = await env.DB.prepare("SELECT points FROM accounts WHERE username = ?").bind(user.username).first<{ points: number }>();
   return json({ username: user.username, role: user.role, points: row ? row.points : 0, salary: salary });
 }
@@ -1709,16 +1767,29 @@ async function deleteMarketBytes(env: Env, itemId: string, storage: string | nul
 async function handleMarketList(request: Request, env: Env): Promise<Response> {
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
+  // 只返回在售商品（已售出的商品成交即从 market_items 删除）
   const { results } = await env.DB.prepare(
-    "SELECT id, seller, name, size, mime, desc, price, sold, buyer, sold_at, created_at FROM market_items ORDER BY created_at DESC LIMIT 100"
+    "SELECT id, seller, name, size, mime, desc, price, created_at FROM market_items WHERE sold = 0 ORDER BY created_at DESC LIMIT 100"
   ).all<any>();
   const items = (results || []).map((r) => ({
     id: r.id, seller: r.seller, name: r.name, size: r.size, mime: r.mime,
-    desc: r.desc, price: r.price, sold: !!r.sold, buyer: r.buyer,
-    soldAt: r.sold_at, createdAt: r.created_at,
+    desc: r.desc, price: r.price, sold: false,
     mine: r.seller === user.username
   }));
-  return json({ items, balance: await pointsOf(env, user.username) });
+  // 我买过的 / 我卖出的（成交记录）
+  let orders: any[] = [];
+  try {
+    const { results: or } = await env.DB.prepare(
+      "SELECT id, item_id, seller, buyer, name, size, price, fee, payout, delivered_id, created_at FROM market_orders WHERE buyer = ? OR seller = ? ORDER BY created_at DESC LIMIT 50"
+    ).bind(user.username, user.username).all<any>();
+    orders = (or || []).map((r) => ({
+      id: r.id, itemId: r.item_id, seller: r.seller, buyer: r.buyer,
+      name: r.name, size: r.size, price: r.price, fee: r.fee, payout: r.payout,
+      deliveredId: r.delivered_id, createdAt: r.created_at,
+      iBought: r.buyer === user.username, iSold: r.seller === user.username
+    }));
+  } catch {}
+  return json({ items, orders, balance: await pointsOf(env, user.username) });
 }
 
 // 上架商品：文件 + 名称 + 描述 + 价格
@@ -1753,10 +1824,12 @@ async function handleMarketUpload(request: Request, env: Env): Promise<Response>
 async function handleMarketBuy(request: Request, env: Env): Promise<Response> {
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
-  let body: { id?: string };
+  let body: { id?: string; deliver?: string };
   try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
   const id = (body.id || "").trim();
   if (!id) return json({ error: "缺少商品" }, 400);
+  // deliver: cloud = 存入买家云空间；download = 直接下载到本机（文件暂留服务器）
+  const deliver = body.deliver === "cloud" ? "cloud" : "download";
   const item = await env.DB.prepare("SELECT * FROM market_items WHERE id = ?").bind(id).first<any>();
   if (!item) return json({ error: "商品不存在" }, 404);
   if (item.sold) return json({ error: "该商品已被购买" }, 409);
@@ -1792,7 +1865,54 @@ async function handleMarketBuy(request: Request, env: Env): Promise<Response> {
     if (payout > 0) await env.DB.prepare("UPDATE accounts SET points = points - ? WHERE username = ?").bind(payout, item.seller).run();
     return json({ error: "该商品刚被其他人买走" }, 409);
   }
-  return json({ ok: true, price, fee, payout, balance: await pointsOf(env, user.username) });
+
+  // 成交后按 deliver 处理：
+  //   cloud   → 转存到买家的云空间，随即删除商品与后端文件
+  //   download → 文件暂留服务器供买家下载（下载完成后再清理）
+  let deliveredId = "";
+  let bytes: Uint8Array | null = null;
+  try {
+    bytes = await loadMarketBytes(env, id, item.storage);
+  } catch (e) {
+    console.error("读取商品文件失败：", e);
+  }
+  if (deliver === "cloud" && bytes) {
+    try {
+      deliveredId = "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      const cStorage = await storeCloudBytes(env, deliveredId, bytes, item.mime || "application/octet-stream");
+      await env.DB.prepare("INSERT INTO cloud_files (id, owner, name, size, mime, data, storage, created_at) VALUES (?, ?, ?, ?, ?, '', ?, ?)")
+        .bind(deliveredId, user.username, item.name, item.size, item.mime, cStorage, new Date().toISOString()).run();
+      await env.DB.prepare("UPDATE cloud_subs SET used_mb = used_mb + ? WHERE username = ?")
+        .bind(item.size / (1024 * 1024), user.username).run();
+    } catch (e) {
+      console.error("商品转存到买家云存储失败：", e);
+      deliveredId = "";
+    }
+  }
+  // 留档成交记录
+  const orderId = "mo" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  try {
+    await env.DB.prepare(
+      "INSERT INTO market_orders (id, item_id, seller, buyer, name, size, mime, price, fee, payout, delivered_id, deliver, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).bind(orderId, id, item.seller, user.username, item.name, item.size, item.mime,
+      price, fee, payout, deliveredId || null, deliver, new Date().toISOString()).run();
+  } catch {}
+
+  // deliver=cloud 且转存成功 → 商品与后端文件立即删除（已售出不留在商店）
+  // deliver=download → 商品标记已售但保留文件，等买家下载完再清理
+  if (deliveredId) {
+    await deleteMarketBytes(env, id, item.storage);
+    await env.DB.prepare("DELETE FROM market_items WHERE id = ?").bind(id).run();
+  } else {
+    await env.DB.prepare("UPDATE market_items SET sold = 1, buyer = ?, sold_at = ? WHERE id = ?")
+      .bind(user.username, new Date().toISOString(), id).run();
+  }
+
+  return json({
+    ok: true, price, fee, payout, deliver, orderId,
+    delivered: !!deliveredId, deliveredId,
+    balance: await pointsOf(env, user.username)
+  });
 }
 
 // 下架自己的商品（未售出才能下架，退款不涉及——上架不收费）
@@ -1807,7 +1927,7 @@ async function handleMarketRemove(request: Request, env: Env): Promise<Response>
   if (item.seller !== user.username && user.role !== "root-admin") {
     return json({ error: "只能下架自己上架的商品" }, 403);
   }
-  if (item.sold) return json({ error: "已售出的商品无法下架" }, 409);
+  if (item.sold) return json({ error: "已售出的商品已自动下架" }, 409);
   await deleteMarketBytes(env, id, item.storage);
   await env.DB.prepare("DELETE FROM market_items WHERE id = ?").bind(id).run();
   return json({ ok: true });
@@ -1820,7 +1940,7 @@ async function handleMarketFile(request: Request, env: Env): Promise<Response> {
   const id = (new URL(request.url).searchParams.get("id") || "").trim();
   if (!id) return json({ error: "缺少商品" }, 400);
   const item = await env.DB.prepare("SELECT * FROM market_items WHERE id = ?").bind(id).first<any>();
-  if (!item) return json({ error: "商品不存在" }, 404);
+  if (!item) return json({ error: "商品不存在（可能已售出并下架）" }, 404);
   if (!item.sold && item.seller !== user.username) {
     return json({ error: "该商品未售出，暂不能下载" }, 403);
   }
@@ -1835,6 +1955,67 @@ async function handleMarketFile(request: Request, env: Env): Promise<Response> {
       "cache-control": "no-store"
     }
   });
+}
+
+// 买家确认下载完成 → 清理服务器上的商品文件（deliver=download 场景）
+async function handleMarketOrderDone(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  let body: { id?: string };
+  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  const id = (body.id || "").trim();
+  if (!id) return json({ error: "缺少记录" }, 400);
+  const ord = await env.DB.prepare("SELECT * FROM market_orders WHERE id = ?").bind(id).first<any>();
+  if (!ord) return json({ ok: true, cleaned: false });
+  if (ord.buyer !== user.username) return json({ error: "无权操作" }, 403);
+  // 只有 deliver=download 且文件仍在服务器上时才清理
+  if (!ord.delivered_id && ord.deliver === "download") {
+    const it = await env.DB.prepare("SELECT id, storage FROM market_items WHERE id = ?").bind(ord.item_id).first<any>();
+    if (it) {
+      await deleteMarketBytes(env, it.id, it.storage);
+      await env.DB.prepare("DELETE FROM market_items WHERE id = ?").bind(it.id).run();
+    }
+  }
+  return json({ ok: true, cleaned: true });
+}
+
+// 成交记录里的商品文件：成交时已转存到买家云存储，这里按转存后的 cloud_files 下载
+async function handleMarketOrderFile(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  const id = (new URL(request.url).searchParams.get("id") || "").trim();
+  if (!id) return json({ error: "缺少记录" }, 400);
+  const ord = await env.DB.prepare("SELECT * FROM market_orders WHERE id = ?").bind(id).first<any>();
+  if (!ord) return json({ error: "记录不存在" }, 404);
+  if (ord.buyer !== user.username && ord.seller !== user.username) {
+    return json({ error: "无权下载该文件" }, 403);
+  }
+  // deliver=cloud：文件已在买家云空间里，从 cloud_files 取
+  let fileId = ord.delivered_id;
+  let storage: string | null = null;
+  let name = ord.name;
+  let mime = ord.mime;
+  if (fileId) {
+    const cf = await env.DB.prepare("SELECT id, name, mime, storage FROM cloud_files WHERE id = ? AND owner = ?")
+      .bind(ord.delivered_id, ord.buyer).first<any>();
+    if (cf) { storage = cf.storage; name = cf.name; mime = cf.mime; }
+    else fileId = "";
+  }
+  // deliver=download：文件仍在商品记录里，从市场后端取
+  if (!fileId) {
+    const it = await env.DB.prepare("SELECT id, name, mime, storage FROM market_items WHERE id = ?").bind(ord.item_id).first<any>();
+    if (!it) return json({ error: "文件已不存在（可能已完成下载并清理）" }, 404);
+    fileId = it.id; name = it.name; mime = it.mime; storage = it.storage;
+  }
+  // 从市场后端取（deliver=download，文件仍在 market_* 里）
+  let bytes: Uint8Array | null = null;
+  if (fileId && !ord.delivered_id) {
+    bytes = await loadMarketBytes(env, fileId, storage);
+  } else if (fileId) {
+    bytes = await loadCloudBytes(env, fileId, storage);
+  }
+  if (!bytes) return json({ error: "文件数据已丢失" }, 410);
+  return json({ name, mime, size: bytes.length, base64: bytesToBase64(bytes) });
 }
 
 
@@ -2088,6 +2269,8 @@ export default {
     if (url.pathname === "/api/market/buy" && request.method === "POST") return handleMarketBuy(request, env);
     if (url.pathname === "/api/market/remove" && request.method === "POST") return handleMarketRemove(request, env);
     if (url.pathname === "/api/market/file" && request.method === "GET") return handleMarketFile(request, env);
+    if (url.pathname === "/api/market/order-file" && request.method === "GET") return handleMarketOrderFile(request, env);
+    if (url.pathname === "/api/market/order-done" && request.method === "POST") return handleMarketOrderDone(request, env);
 
     if (url.pathname === "/room") {
       const token = url.searchParams.get("token") || "";
@@ -2209,9 +2392,11 @@ export class Room {
       }
       this.roomOf.set(ws, room);
       void purgeOldMessages(this.env);
+      // 历史查询按房间 class 用对应保留期：C 类 21 天 / B 类 7 天 / A 类 5 天
+      const histCut = await roomRetentionCutoff(this.env, room);
       const { results } = await this.env.DB.prepare(
         "SELECT sender, role, text, ts FROM messages WHERE room = ? AND ts >= ? ORDER BY id DESC LIMIT 200"
-      ).bind(room, new Date(Date.now() - MSG_RETENTION_MS).toISOString()).all<{ sender: string; role: string; text: string; ts: string }>();
+      ).bind(room, histCut).all<{ sender: string; role: string; text: string; ts: string }>();
       this.sendTo(ws, { type: "history", room: room, messages: (results || []).reverse() });
       this.broadcastToRoom({ type: "sys", text: user.username + " 进入了会话" }, room);
       this.broadcastPresence(room);

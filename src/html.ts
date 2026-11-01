@@ -1156,7 +1156,7 @@ export const html = `<!DOCTYPE html>
     if (typeof m.text === 'string' && m.text.indexOf('{"__file"') === 0) {
       try {
         var fm = JSON.parse(m.text);
-        buildFileMsg({ self: !!m.self, sender: m.sender, time: m.time, name: fm.name, size: fm.size, fileId: fm.id, role: m.role });
+        buildFileMsg({ self: !!m.self, sender: m.sender, time: m.time, name: fm.name, size: fm.size, mime: fm.mime, fileId: fm.id, role: m.role });
         fileDone(fm.id, null, fm.name, fm.size, false);
         return;
       } catch (e) {}
@@ -1289,7 +1289,7 @@ export const html = `<!DOCTYPE html>
         appendMsg({ sender: d.sender, role: d.role, text: d.text, time: nowTime(), self: d.sender === me }, true);
       } else if (d.type === 'file-start') {
         recvState = { fileId: d.id, name: d.name, size: d.size, mime: d.mime, chunks: [], received: 0 };
-        buildFileMsg({ self: false, sender: d.sender || '对方', time: nowTime(), name: d.name, size: d.size, fileId: d.id, role: d.role });
+        buildFileMsg({ self: false, sender: d.sender || '对方', time: nowTime(), name: d.name, size: d.size, mime: d.mime, fileId: d.id, role: d.role });
         setTransferring(1);
       } else if (d.type === 'file-end') {
         if (recvState && recvState.fileId === d.id) {
@@ -2335,6 +2335,7 @@ export const html = `<!DOCTYPE html>
     var div = document.createElement('div');
     div.className = 'msg ' + (m.self ? 'self' : 'other');
     div.setAttribute('data-file', m.fileId);
+    if (m.mime) div.setAttribute('data-mime', m.mime);
     var row = metaRow(m);
     div.appendChild(row[0]);
     div.appendChild(row[1]);
@@ -2387,8 +2388,63 @@ export const html = `<!DOCTYPE html>
     a.remove();
   }
 
+  // ===== 文件落盘（确认写盘完成后才启动后续动作）=====
+  // 优先用 File System Access API：用户选好位置 → 写入磁盘 → 写完才 resolve，
+  // 这样能保证「文件确实已存到本机」之后再去打开/提示。
+  // 浏览器不支持时降级为普通 <a download>（无法感知写盘完成，按已保存处理）。
+  function saveBlobToDisk(blob, name) {
+    if (window.showSaveFilePicker) {
+      return window.showSaveFilePicker({
+        suggestedName: name,
+        types: [{ description: '文件', accept: { 'application/octet-stream': ['.' + (name.split('.').pop() || 'bin')] } }]
+      }).then(function (handle) {
+        return handle.createWritable().then(function (w) {
+          return w.write(blob).then(function () { return w.close(); });
+        });
+      }).then(function () {
+        return { saved: true, method: 'picker' };
+      }).catch(function (e) {
+        if (e && (e.name === 'AbortError' || e.name === 'NotAllowedError')) {
+          var err = new Error('已取消保存');
+          err.cancelled = true;
+          throw err;
+        }
+        // 写盘失败 → 降级普通下载
+        triggerLocalDownload(blob, name);
+        return { saved: true, method: 'fallback' };
+      });
+    }
+    triggerLocalDownload(blob, name);
+    return Promise.resolve({ saved: true, method: 'anchor' });
+  }
+
+  // 询问是否同时保存到云空间（必须在下载前问，不能下载完才问）
+  // 返回 Promise<boolean>：true = 存云
+  function askSaveToCloud(name) {
+    return api('/api/cloud/status').then(function (r) {
+      if (!r.ok) return false;
+      var s = r.data;
+      var hasSpace = s.isRA || (s.kind === 'paid' && !s.expired);
+      if (!hasSpace) return false;               // 没云空间 → 不问，直接下载
+      if ((s.totalMb - s.usedMb) <= 0) return false;
+      return confirm('是否同时把「' + name + '」保存到你的云空间？（免费，可随时再下载）');
+    }).catch(function () { return false; });
+  }
+
+  // 聊天文件下载统一入口：先问要不要存云 → 下载 → 落盘确认 → （可选）存云
+  async function downloadChatFile(fileId, name, mime) {
+    var wantCloud = await askSaveToCloud(name);
+    var blob = await serverDownload(fileId, name);
+    var res = await saveBlobToDisk(blob, name);
+    if (res && res.cancelled) return;
+    if (wantCloud) {
+      uploadCloudBlob(blob, name, mime || blob.type || 'application/octet-stream');
+    }
+  }
+
   function fileDone(fileId, url, name, size, free) {
     var div = messages.querySelector('[data-file="' + fileId + '"]');
+    var mimeOf = (div && div.getAttribute('data-mime')) || '';
     if (!div) return;
     var sz = div.querySelector('.f-size');
     if (sz) sz.textContent = fmtSize(size);
@@ -2403,11 +2459,13 @@ export const html = `<!DOCTYPE html>
       dl.className = 'f-dl';
       dl.href = '#';
       dl.textContent = '下载';
-      dl.addEventListener('click', function (e) {
+      dl.addEventListener('click', async function (e) {
         e.preventDefault();
-        serverDownload(fileId, name)
-          .then(function (blob) { triggerLocalDownload(blob, name); return maybeSaveToCloud(blob, name); })
-          .catch(function () {});
+        try {
+          await downloadChatFile(fileId, name, mimeOf);
+        } catch (err) {
+          if (err && !err.cancelled) appendSys('下载失败：' + (err.message || '未知错误'));
+        }
       });
       card.appendChild(dl);
       return;
@@ -2440,9 +2498,18 @@ export const html = `<!DOCTYPE html>
             return;
           }
           try {
+            // 先问要不要存云（下载之前问），再下载 → 落盘确认
+            var wantCloud = await askSaveToCloud(name);
             var blob = await serverDownload(fileId, name);
-            triggerLocalDownload(blob, name);
-            await maybeSaveToCloud(blob, name);
+            var res = await saveBlobToDisk(blob, name);
+            if (res && res.cancelled) {
+              payBtn.textContent = '💾 付费下载 · ' + cost + ' Credits';
+              payBtn.disabled = false;
+              return;
+            }
+            if (wantCloud) {
+              await uploadCloudBlob(blob, name, mimeOf || blob.type || 'application/octet-stream');
+            }
             payBtn.textContent = '✓ 已保存（-' + cost + ' Credits）';
             refreshMe();
           } catch (e2) {
@@ -2518,7 +2585,7 @@ export const html = `<!DOCTYPE html>
   function startUpload(f, uploadCost) {
     if (!ws || ws.readyState !== WebSocket.OPEN) { appendSys('连接已断开，请稍后重试'); return; }
     var fileId = 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    buildFileMsg({ self: true, sender: me, time: nowTime(), name: f.name, size: f.size, fileId: fileId, role: meRole });
+    buildFileMsg({ self: true, sender: me, time: nowTime(), name: f.name, size: f.size, mime: f.type, fileId: fileId, role: meRole });
     setTransferring(1);
     ws.send(JSON.stringify({ type: 'file-start', id: fileId, name: f.name, size: f.size, mime: f.type || 'application/octet-stream' }));
     var offset = 0;
@@ -3071,11 +3138,53 @@ export const html = `<!DOCTYPE html>
         buy.addEventListener('click', async function () {
           if (!confirm('花 ' + it.price + ' Credits 购买「' + it.name + '」？')) return;
           buy.disabled = true;
-          var rr = await api('/api/market/buy', { id: it.id });
+          // 先问买家要「存云空间」还是「直接下载到本机」（问在下载/转存之前）
+          var hasCloud = false;
+          try {
+            var cs = await api('/api/cloud/status');
+            if (cs.ok) {
+              var st = cs.data;
+              hasCloud = (st.isRA || (st.kind === 'paid' && !st.expired)) && (st.totalMb - st.usedMb) > 0;
+            }
+          } catch (e) {}
+          var deliver = 'download';
+          if (hasCloud) {
+            var c = confirm(
+              '「' + it.name + '」买下后怎么接收？\\n\\n' +
+              '【确定】= 保存到你的云空间（可随时再下载）\\n' +
+              '【取消】= 直接下载到本机（不占用云空间）'
+            );
+            deliver = c ? 'cloud' : 'download';
+          }
+          var rr = await api('/api/market/buy', { id: it.id, deliver: deliver });
           buy.disabled = false;
           if (rr.ok) {
             appendSys('购买成功：' + it.name + '（已付 ' + rr.data.price + '，平台手续费 ' + rr.data.fee + '，卖家实收 ' + rr.data.payout + '）');
             loadMarket(); refreshMe();
+            // deliver=download → 文件还没落本机，立刻下载并确认写盘
+            if (deliver === 'download') {
+              try {
+                var od = await api('/api/market/order-file?id=' + encodeURIComponent(rr.data.orderId));
+                if (od.ok && od.data && od.data.base64) {
+                  var bin = atob(od.data.base64);
+                  var arr = new Uint8Array(bin.length);
+                  for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+                  var bl = new Blob([arr], { type: od.data.mime || 'application/octet-stream' });
+                  var sr = await saveBlobToDisk(bl, od.data.name || it.name);
+                  if (sr && !sr.cancelled) {
+                    appendSys('已保存到本机：' + (od.data.name || it.name));
+                    // 落盘确认后清理服务器上的商品文件
+                    await api('/api/market/order-done', { id: rr.data.orderId });
+                  }
+                } else {
+                  appendSys('购买成功，但文件下载失败：' + (od.data && od.data.error ? od.data.error : '未知错误'));
+                }
+              } catch (e3) {
+                appendSys('购买成功，但文件下载失败：' + (e3.message || '网络错误'));
+              }
+            } else {
+              appendSys('已存入你的云空间（「云存储」页面可随时下载）');
+            }
           } else {
             appendSys('购买失败：' + (rr.data.error || ('HTTP ' + rr.status)));
           }
