@@ -330,6 +330,34 @@ export const html = `<!DOCTYPE html>
   .hint { margin-top: 14px; font-size: 11.5px; color: var(--dim); text-align: center; line-height: 1.9; }
   .hint b { color: #00ff96; font-weight: 400; }
 
+  /* ========== 文件资源商店 ========== */
+  .market-section { margin-top: 20px; padding-top: 16px; border-top: 1px solid rgba(0,240,255,.22); }
+  .market-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; flex-wrap: wrap; }
+  .market-head h3 { font-size: 13px; letter-spacing: 2px; color: var(--cyan); text-shadow: 0 0 8px rgba(0,240,255,.5); margin: 0; }
+  .market-head .mkt-bal { font-size: 11.5px; color: var(--dim); margin-left: auto; }
+  .market-head .mkt-bal b { color: #00ff96; font-weight: 400; }
+  .market-note { font-size: 11.5px; color: var(--dim); line-height: 1.8; margin: 0 0 12px; }
+  .market-note b { color: var(--magenta); font-weight: 400; }
+  .market-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+  .market-form .full { grid-column: 1 / -1; }
+  .market-form .field { margin: 0; }
+  .market-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; max-height: 46vh; overflow-y: auto; }
+  .market-item { border: 1px solid var(--line); border-radius: 8px; padding: 11px 13px; background: rgba(255,255,255,.02); }
+  .market-item.sold { opacity: .55; border-color: rgba(255,255,255,.08); }
+  .market-item .mi-top { display: flex; align-items: center; gap: 10px; }
+  .market-item .mi-name { font-size: 13px; color: var(--fg); flex: 1; word-break: break-all; }
+  .market-item .mi-price { font-size: 14px; color: #00ff96; font-weight: 600; white-space: nowrap; }
+  .market-item .mi-price small { font-size: 10.5px; color: var(--dim); font-weight: 400; }
+  .market-item .mi-meta { font-size: 11px; color: var(--dim); margin-top: 5px; line-height: 1.7; }
+  .market-item .mi-desc { font-size: 11.5px; color: var(--dim); margin-top: 5px; line-height: 1.7; word-break: break-word; }
+  .market-item .mi-ops { display: flex; gap: 8px; margin-top: 9px; flex-wrap: wrap; }
+  .market-item .mi-badge { font-size: 10.5px; padding: 2px 7px; border-radius: 4px; border: 1px solid; }
+  .market-item .mi-badge.sell { color: var(--magenta); border-color: rgba(255,46,151,.5); }
+  .market-item .mi-badge.own { color: var(--cyan); border-color: rgba(0,240,255,.5); }
+  .market-item .mi-badge.done { color: var(--dim); border-color: var(--line); }
+  .market-empty { font-size: 11.5px; color: var(--dim); text-align: center; padding: 22px 0; line-height: 1.9; }
+  @media (max-width: 640px) { .market-form { grid-template-columns: 1fr; } }
+
   @media (prefers-reduced-motion: reduce) {
     .scanline { display: none; }
     .btn, .panel, input { transition: none; }
@@ -584,6 +612,40 @@ export const html = `<!DOCTYPE html>
         <div class="d">所有游戏均暂时故障，SHOP 不售卖房间号，也不会扣除任何 Credits。<br>已购买的房间号不受影响，仍可在游戏大厅「输入房间号加入」。<br>修复后 SHOP 会重新开张，敬请期待。</div>
       </div>
       <div class="err" id="shopErr"></div>
+
+      <!-- ========== 文件资源商店 ========== -->
+      <div class="market-section">
+        <div class="market-head">
+          <h3>📦 文件资源商店</h3>
+          <span class="mkt-bal">我的 Credits：<b id="mktBalance">0</b></span>
+        </div>
+        <p class="market-note">
+          任何人可自由上传文件并自行标价。买家付款后，总价的 <b>5%</b> 作为平台手续费，
+          其余 <b>95%</b> 进入卖家口袋。单文件上限 20MB。
+        </p>
+
+        <div class="market-form">
+          <div class="field">
+            <label>选择文件（≤20MB）</label>
+            <input type="file" id="mktFile">
+          </div>
+          <div class="field">
+            <label>标价（Credits）</label>
+            <input id="mktPrice" type="number" min="1" max="100000" value="10">
+          </div>
+          <div class="field full">
+            <label>商品说明（可选，≤500 字）</label>
+            <input id="mktDesc" type="text" maxlength="500" placeholder="例：七年级数学北师大版上册第一章同步练习（含答案）">
+          </div>
+          <div class="full">
+            <button class="btn wide" id="btnMktUpload">▸ 上架这个文件</button>
+          </div>
+        </div>
+        <div class="err" id="mktUploadErr"></div>
+
+        <div class="market-list" id="mktList"></div>
+      </div>
+
       <div class="tool-row"><button class="btn small magenta" id="btnShopBack">▸ 返回聊天</button></div>
     </div>
 
@@ -2911,7 +2973,167 @@ export const html = `<!DOCTYPE html>
     document.getElementById('shopErr').textContent = '';
     showOnly(shopPanel);
     refreshMe();
+    loadMarket();
   }
+
+  // ===== 文件资源商店 =====
+  var mktBalance = document.getElementById('mktBalance');
+  var mktList = document.getElementById('mktList');
+  var mktUploadErr = document.getElementById('mktUploadErr');
+  var MARKET_FEE_RATE = 0.05;
+
+  async function loadMarket() {
+    try {
+      var r = await fetch('/api/market/list', { headers: { Authorization: 'Bearer ' + token } });
+      var d = {};
+      try { d = await r.json(); } catch (e) {}
+      if (!r.ok) { if (mktList) mktList.innerHTML = '<div class="market-empty">加载失败：' + (d.error || ('HTTP ' + r.status)) + '</div>'; return; }
+      if (mktBalance) mktBalance.textContent = d.balance || 0;
+      renderMarket(d.items || []);
+    } catch (e) {
+      if (mktList) mktList.innerHTML = '<div class="market-empty">网络错误</div>';
+    }
+  }
+
+  function renderMarket(items) {
+    if (!mktList) return;
+    mktList.innerHTML = '';
+    if (!items.length) {
+      mktList.innerHTML = '<div class="market-empty">还没有人上架文件<br>成为第一个卖家吧</div>';
+      return;
+    }
+    items.forEach(function (it) {
+      var div = document.createElement('div');
+      div.className = 'market-item' + (it.sold ? ' sold' : '');
+
+      var top = document.createElement('div');
+      top.className = 'mi-top';
+      var nm = document.createElement('span');
+      nm.className = 'mi-name';
+      nm.textContent = it.name;
+      var pr = document.createElement('span');
+      pr.className = 'mi-price';
+      pr.innerHTML = (it.sold ? '' : '') + it.price + ' <small>Credits</small>';
+      top.appendChild(nm);
+      top.appendChild(pr);
+      div.appendChild(top);
+
+      var meta = document.createElement('div');
+      meta.className = 'mi-meta';
+      var fee = Math.floor(it.price * MARKET_FEE_RATE);
+      var parts = [];
+      parts.push('卖家 ' + it.seller);
+      parts.push(fmtSize(it.size));
+      if (it.mime) parts.push(it.mime);
+      if (!it.sold) parts.push('卖家实收 ' + (it.price - fee) + '（手续费 ' + fee + '）');
+      meta.textContent = parts.join(' · ');
+      div.appendChild(meta);
+
+      if (it.desc) {
+        var ds = document.createElement('div');
+        ds.className = 'mi-desc';
+        ds.textContent = it.desc;
+        div.appendChild(ds);
+      }
+
+      var ops = document.createElement('div');
+      ops.className = 'mi-ops';
+
+      if (it.sold) {
+        var b1 = document.createElement('span');
+        b1.className = 'mi-badge done';
+        b1.textContent = '已售出' + (it.buyer ? ' → ' + it.buyer : '');
+        ops.appendChild(b1);
+        var dl = document.createElement('button');
+        dl.className = 'btn small';
+        dl.textContent = '⬇ 下载';
+        dl.addEventListener('click', function () { downloadMarketFile(it.id, it.name); });
+        ops.appendChild(dl);
+      } else if (it.mine) {
+        var b2 = document.createElement('span');
+        b2.className = 'mi-badge own';
+        b2.textContent = '我上架的';
+        ops.appendChild(b2);
+        var rm = document.createElement('button');
+        rm.className = 'btn small magenta';
+        rm.textContent = '✕ 下架';
+        rm.addEventListener('click', async function () {
+          if (!confirm('下架「' + it.name + '」？')) return;
+          var rr = await api('/api/market/remove', { id: it.id });
+          if (rr.ok) { appendSys('已下架：' + it.name); loadMarket(); }
+          else appendSys(rr.data.error || '下架失败');
+        });
+        ops.appendChild(rm);
+      } else {
+        var buy = document.createElement('button');
+        buy.className = 'btn small';
+        buy.textContent = '⬛ 购买（' + it.price + ' Credits）';
+        buy.addEventListener('click', async function () {
+          if (!confirm('花 ' + it.price + ' Credits 购买「' + it.name + '」？')) return;
+          buy.disabled = true;
+          var rr = await api('/api/market/buy', { id: it.id });
+          buy.disabled = false;
+          if (rr.ok) {
+            appendSys('购买成功：' + it.name + '（已付 ' + rr.data.price + '，平台手续费 ' + rr.data.fee + '，卖家实收 ' + rr.data.payout + '）');
+            loadMarket(); refreshMe();
+          } else {
+            appendSys('购买失败：' + (rr.data.error || ('HTTP ' + rr.status)));
+          }
+        });
+        ops.appendChild(buy);
+      }
+      div.appendChild(ops);
+      mktList.appendChild(div);
+    });
+  }
+
+  function downloadMarketFile(id, name) {
+    fetch('/api/market/file?id=' + encodeURIComponent(id), { headers: { Authorization: 'Bearer ' + token } })
+      .then(function (r) {
+        if (!r.ok) {
+          return r.json().catch(function () { return {}; }).then(function (e) {
+            throw new Error(e.error || ('HTTP ' + r.status));
+          });
+        }
+        return r.blob();
+      })
+      .then(function (blob) { triggerDownload(blob, name); })
+      .catch(function (e) { appendSys('下载失败：' + (e && e.message ? e.message : '未知错误')); });
+  }
+
+  document.getElementById('btnMktUpload').addEventListener('click', async function () {
+    var f = document.getElementById('mktFile').files && document.getElementById('mktFile').files[0];
+    var price = parseInt(document.getElementById('mktPrice').value, 10);
+    var desc = (document.getElementById('mktDesc').value || '').trim();
+    mktUploadErr.textContent = '';
+    if (!f) { mktUploadErr.textContent = '请先选择文件'; return; }
+    if (!isFinite(price) || price < 1 || price > 100000) { mktUploadErr.textContent = '标价限 1-100000 Credits'; return; }
+    if (f.size > 20 * 1024 * 1024) { mktUploadErr.textContent = '文件超过 20MB 上限（' + fmtSize(f.size) + '）'; return; }
+    var btn = this;
+    btn.disabled = true;
+    mktUploadErr.textContent = '上传中…';
+    try {
+      var r = await fetch('/api/market/upload?name=' + encodeURIComponent(f.name) +
+        '&mime=' + encodeURIComponent(f.type || 'application/octet-stream') +
+        '&price=' + price + '&desc=' + encodeURIComponent(desc), {
+        method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: f
+      });
+      var d = {};
+      try { d = await r.json(); } catch (e) {}
+      if (r.ok && d.ok) {
+        document.getElementById('mktFile').value = '';
+        document.getElementById('mktDesc').value = '';
+        mktUploadErr.textContent = '';
+        appendSys('已上架：' + f.name + '（标价 ' + price + ' Credits）');
+        loadMarket(); refreshMe();
+      } else {
+        mktUploadErr.textContent = d.error || ('上架失败（HTTP ' + r.status + '）');
+      }
+    } catch (e) {
+      mktUploadErr.textContent = '上架失败：' + (e && e.message ? e.message : '网络错误');
+    }
+    btn.disabled = false;
+  });
 
   // ===== 云存储 =====
   var repostFileId = null;

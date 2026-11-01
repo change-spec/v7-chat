@@ -502,6 +502,27 @@ async function ensureSchema(env: Env): Promise<void> {
         text TEXT NOT NULL,
         ts TEXT NOT NULL
       )`),
+      // 文件资源商店：任何人可上架文件并自由标价，买家付款后卖家收（扣 5% 手续费）
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS market_items (
+        id TEXT PRIMARY KEY,
+        seller TEXT NOT NULL,
+        name TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        mime TEXT,
+        desc TEXT,
+        price INTEGER NOT NULL,
+        storage TEXT,
+        sold INTEGER NOT NULL DEFAULT 0,
+        buyer TEXT,
+        sold_at TEXT,
+        created_at TEXT NOT NULL
+      )`),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS market_files (
+        file_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        data TEXT NOT NULL,
+        PRIMARY KEY (file_id, seq)
+      )`),
       env.DB.prepare(`CREATE TABLE IF NOT EXISTS admin_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         admin TEXT NOT NULL,
@@ -1618,6 +1639,204 @@ async function handleCloudRenew(request: Request, env: Env): Promise<Response> {
   return json({ ok: true, ...(await cloudStatus(env, user)) });
 }
 
+// ========== 文件资源商店 ==========
+// 规则：任何人可上架文件并自由标价；买家付款时从买家积分扣除总价，
+// 其中 5% 作为平台手续费（不进入卖家口袋），其余 95% 进入卖家积分。
+const MARKET_FEE_RATE = 0.05;          // 平台手续费 5%
+const MARKET_MAX_PRICE = 100000;       // 单件最高标价（Credits）
+const MARKET_FILE_CAP = 20 * 1024 * 1024; // 单文件上限 20MB（与云存储一致）
+
+// 商品文件二进制：优先 Supabase（与云存储同桶，路径前缀 market/），失败降级 D1 分片
+const MARKET_SB_PREFIX = "market/";
+
+async function storeMarketBytes(env: Env, itemId: string, bytes: Uint8Array, mime: string): Promise<string> {
+  if (sbEnabled(env)) {
+    try {
+      const url = env.SUPABASE_URL + "/storage/v1/object/" + sbBucket(env) + "/" + MARKET_SB_PREFIX + itemId;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: sbHeaders(env, { "Content-Type": mime || "application/octet-stream", "x-upsert": "true" }),
+        body: bytes as unknown as BodyInit
+      });
+      if (res.ok) return "supabase";
+    } catch (e) {
+      console.error("市场文件上传 Supabase 失败，降级 D1：", e);
+    }
+  }
+  const b64 = bytesToBase64(bytes);
+  const CH = 60000;
+  const inserts: any[] = [];
+  for (let i = 0, seq = 1; i < b64.length; i += CH, seq++) {
+    inserts.push(env.DB.prepare("INSERT INTO market_files (file_id, seq, data) VALUES (?, ?, ?)").bind(itemId, seq, b64.slice(i, i + CH)));
+    if (inserts.length >= 100) { await env.DB.batch(inserts); inserts.length = 0; }
+  }
+  if (inserts.length) await env.DB.batch(inserts);
+  return "d1";
+}
+
+async function loadMarketBytes(env: Env, itemId: string, storage: string | null): Promise<Uint8Array | null> {
+  if (storage === "supabase" && sbEnabled(env)) {
+    try {
+      const url = env.SUPABASE_URL + "/storage/v1/object/" + sbBucket(env) + "/" + MARKET_SB_PREFIX + itemId;
+      const res = await fetch(url, { headers: sbHeaders(env) });
+      if (!res.ok) return null;
+      return new Uint8Array(await res.arrayBuffer());
+    } catch (e) {
+      console.error("市场文件读取 Supabase 失败：", e);
+      return null;
+    }
+  }
+  const { results } = await env.DB.prepare("SELECT data FROM market_files WHERE file_id = ? ORDER BY seq ASC")
+    .bind(itemId).all<{ data: string }>();
+  const b64 = (results || []).map((r) => r.data).join("");
+  if (!b64) return null;
+  return base64ToBytes(b64);
+}
+
+async function deleteMarketBytes(env: Env, itemId: string, storage: string | null): Promise<void> {
+  if (storage === "supabase" && sbEnabled(env)) {
+    try {
+      const url = env.SUPABASE_URL + "/storage/v1/object/" + sbBucket(env) + "/" + MARKET_SB_PREFIX + itemId;
+      await fetch(url, { method: "DELETE", headers: sbHeaders(env) });
+    } catch (e) {
+      console.error("市场文件删除失败：", e);
+    }
+  }
+  await env.DB.prepare("DELETE FROM market_files WHERE file_id = ?").bind(itemId).run();
+}
+
+// 商品列表：在售 + 我卖出的
+async function handleMarketList(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  const { results } = await env.DB.prepare(
+    "SELECT id, seller, name, size, mime, desc, price, sold, buyer, sold_at, created_at FROM market_items ORDER BY created_at DESC LIMIT 100"
+  ).all<any>();
+  const items = (results || []).map((r) => ({
+    id: r.id, seller: r.seller, name: r.name, size: r.size, mime: r.mime,
+    desc: r.desc, price: r.price, sold: !!r.sold, buyer: r.buyer,
+    soldAt: r.sold_at, createdAt: r.created_at,
+    mine: r.seller === user.username
+  }));
+  return json({ items, balance: await pointsOf(env, user.username) });
+}
+
+// 上架商品：文件 + 名称 + 描述 + 价格
+async function handleMarketUpload(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  const url = new URL(request.url);
+  const name = (url.searchParams.get("name") || "file").slice(0, 200);
+  const mime = (url.searchParams.get("mime") || "application/octet-stream").slice(0, 200);
+  const desc = (url.searchParams.get("desc") || "").slice(0, 500);
+  const price = Math.floor(Number(url.searchParams.get("price")));
+  if (!isFinite(price) || price < 1 || price > MARKET_MAX_PRICE) {
+    return json({ error: "标价限 1-" + MARKET_MAX_PRICE + " Credits" }, 400);
+  }
+  let buf: ArrayBuffer;
+  try { buf = await request.arrayBuffer(); } catch { return json({ error: "读取文件失败" }, 400); }
+  const size = buf.byteLength;
+  if (size <= 0) return json({ error: "空文件" }, 400);
+  if (size > MARKET_FILE_CAP) {
+    return json({ error: "文件 " + fmtMB(size) + "MB 超过上限 " + (MARKET_FILE_CAP / (1024 * 1024)) + "MB" }, 413);
+  }
+  const id = "m" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const storage = await storeMarketBytes(env, id, new Uint8Array(buf), mime);
+  await env.DB.prepare(
+    "INSERT INTO market_items (id, seller, name, size, mime, desc, price, storage, sold, buyer, sold_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?)"
+  ).bind(id, user.username, name, size, mime, desc, price, storage, new Date().toISOString()).run();
+  await logCredits(env, user.username, 0, "上架商品 " + name + "（标价 " + price + " Credits）");
+  return json({ ok: true, id, price, size, balance: await pointsOf(env, user.username) });
+}
+
+// 购买：扣买家总价 → 5% 手续费 → 95% 给卖家
+async function handleMarketBuy(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  let body: { id?: string };
+  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  const id = (body.id || "").trim();
+  if (!id) return json({ error: "缺少商品" }, 400);
+  const item = await env.DB.prepare("SELECT * FROM market_items WHERE id = ?").bind(id).first<any>();
+  if (!item) return json({ error: "商品不存在" }, 404);
+  if (item.sold) return json({ error: "该商品已被购买" }, 409);
+  if (item.seller === user.username) return json({ error: "不能购买自己上架的商品" }, 400);
+
+  const price = item.price;
+  const fee = Math.floor(price * MARKET_FEE_RATE);   // 平台手续费
+  const payout = price - fee;                          // 卖家实收
+
+  // 先扣买家（余额不足直接拒绝，不动数据）
+  const buyerRow = await env.DB.prepare("SELECT points FROM accounts WHERE username = ?").bind(user.username).first<{ points: number }>();
+  if (!buyerRow || buyerRow.points < price) {
+    return json({ error: "Credits 不足：需要 " + price + "，当前 " + (buyerRow ? buyerRow.points : 0) }, 409);
+  }
+  await env.DB.prepare("UPDATE accounts SET points = points - ? WHERE username = ?").bind(price, user.username).run();
+  await logCredits(env, user.username, -price, "购买商品 " + item.name);
+
+  // 卖家入账（payout 可能为 0：标价 1-19 Credits 时 5% 舍入后为 0）
+  if (payout > 0) {
+    await env.DB.prepare("UPDATE accounts SET points = points + ? WHERE username = ?").bind(payout, item.seller).run();
+    await logCredits(env, item.seller, payout, "售出商品 " + item.name + "（标价 " + price + "，平台手续费 " + fee + "）");
+  } else {
+    await logCredits(env, item.seller, 0, "售出商品 " + item.name + "（标价 " + price + "，手续费 " + fee + "，实收 0）");
+  }
+
+  // 标记已售（用条件更新防止并发重复售出）
+  const upd = await env.DB.prepare("UPDATE market_items SET sold = 1, buyer = ?, sold_at = ? WHERE id = ? AND sold = 0")
+    .bind(user.username, new Date().toISOString(), id).run();
+  const changed = (upd as any).meta && (upd as any).meta.changes;
+  if (changed === 0) {
+    // 并发下被别的买家抢先 —— 回滚本次扣款
+    await env.DB.prepare("UPDATE accounts SET points = points + ? WHERE username = ?").bind(price, user.username).run();
+    if (payout > 0) await env.DB.prepare("UPDATE accounts SET points = points - ? WHERE username = ?").bind(payout, item.seller).run();
+    return json({ error: "该商品刚被其他人买走" }, 409);
+  }
+  return json({ ok: true, price, fee, payout, balance: await pointsOf(env, user.username) });
+}
+
+// 下架自己的商品（未售出才能下架，退款不涉及——上架不收费）
+async function handleMarketRemove(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  let body: { id?: string };
+  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  const id = (body.id || "").trim();
+  const item = await env.DB.prepare("SELECT * FROM market_items WHERE id = ?").bind(id).first<any>();
+  if (!item) return json({ error: "商品不存在" }, 404);
+  if (item.seller !== user.username && user.role !== "root-admin") {
+    return json({ error: "只能下架自己上架的商品" }, 403);
+  }
+  if (item.sold) return json({ error: "已售出的商品无法下架" }, 409);
+  await deleteMarketBytes(env, id, item.storage);
+  await env.DB.prepare("DELETE FROM market_items WHERE id = ?").bind(id).run();
+  return json({ ok: true });
+}
+
+// 下载商品文件：已售出后买家可下载；未售出时任何人可试读（避免买了才发现是坏文件）
+async function handleMarketFile(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  const id = (new URL(request.url).searchParams.get("id") || "").trim();
+  if (!id) return json({ error: "缺少商品" }, 400);
+  const item = await env.DB.prepare("SELECT * FROM market_items WHERE id = ?").bind(id).first<any>();
+  if (!item) return json({ error: "商品不存在" }, 404);
+  if (!item.sold && item.seller !== user.username) {
+    return json({ error: "该商品未售出，暂不能下载" }, 403);
+  }
+  const bytes = await loadMarketBytes(env, id, item.storage);
+  if (!bytes) return json({ error: "文件数据已丢失" }, 410);
+  const safeName = (item.name || "file").replace(/[\r\n"]/g, "_");
+  return new Response(bytes as unknown as BodyInit, {
+    headers: {
+      "content-type": item.mime || "application/octet-stream",
+      "content-disposition": "attachment; filename=\"" + encodeURIComponent(safeName) + "\"; filename*=UTF-8''" + encodeURIComponent(safeName),
+      "content-length": String(bytes.length),
+      "cache-control": "no-store"
+    }
+  });
+}
+
 
 const MATCH3_FEE = 10;
 
@@ -1863,6 +2082,12 @@ export default {
     if (url.pathname === "/api/cloud/upload" && request.method === "POST") return handleCloudUpload(request, env);
     if (url.pathname === "/api/cloud/repost" && request.method === "POST") return handleCloudRepost(request, env);
     if (url.pathname === "/api/cloud/renew" && request.method === "POST") return handleCloudRenew(request, env);
+    // 文件资源商店
+    if (url.pathname === "/api/market/list" && request.method === "GET") return handleMarketList(request, env);
+    if (url.pathname === "/api/market/upload" && request.method === "POST") return handleMarketUpload(request, env);
+    if (url.pathname === "/api/market/buy" && request.method === "POST") return handleMarketBuy(request, env);
+    if (url.pathname === "/api/market/remove" && request.method === "POST") return handleMarketRemove(request, env);
+    if (url.pathname === "/api/market/file" && request.method === "GET") return handleMarketFile(request, env);
 
     if (url.pathname === "/room") {
       const token = url.searchParams.get("token") || "";
