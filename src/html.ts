@@ -728,6 +728,7 @@ export const html = `<!DOCTYPE html>
             <label>有效期（Root-Admin 设定 · 1-14 天，过期自动失效）</label>
             <select id="otpDays"></select>
           </div>
+          <div class="err" id="otpErr"></div>
           <div class="otp-out hidden" id="otpOut">
             <div class="otp-code" id="otpCode"></div>
             <div style="display:flex;gap:10px;justify-content:center">
@@ -2128,17 +2129,25 @@ export const html = `<!DOCTYPE html>
   })();
   btnGenOtp.addEventListener('click', async function () {
     var amount = parseInt(otpAmount.value, 10);
-    if (!isFinite(amount) || amount < 1) return;
+    var otpErr = document.getElementById('otpErr');
+    otpErr.textContent = '';
+    if (!isFinite(amount) || amount < 1) { otpErr.textContent = '请输入有效的 Credits 数量'; return; }
     btnGenOtp.disabled = true;
     try {
-      var r = await api('/api/admin/create-otp', { amount: amount, days: parseInt(document.getElementById('otpDays').value, 10) });
-      if (r.ok) {
+      var days = parseInt(document.getElementById('otpDays').value, 10);
+      var r = await api('/api/admin/create-otp', { amount: amount, days: days });
+      if (r.ok && r.data && r.data.ok) {
         lastOtp = r.data.code;
         otpCode.textContent = r.data.code;
         otpOut.classList.remove('hidden');
         loadOtps();
+      } else {
+        // 之前这里静默失败，用户只看到"按钮能点但没反应"
+        otpErr.textContent = (r.data && r.data.error) ? r.data.error : ('生成失败（HTTP ' + r.status + '）');
       }
-    } catch (e) {}
+    } catch (e) {
+      otpErr.textContent = '生成失败：' + (e && e.message ? e.message : '网络错误');
+    }
     btnGenOtp.disabled = false;
     measure();
   });

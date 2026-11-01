@@ -593,7 +593,17 @@ async function ensureSchema(env: Env): Promise<void> {
     // storage（supabase = 二进制在 Supabase Storage；d1 = 在 cloud_file_chunks 分片里）
     try { await env.DB.prepare("ALTER TABLE cloud_files ADD COLUMN storage TEXT").run(); } catch {}
     try { await env.DB.prepare("UPDATE cloud_files SET storage = 'd1' WHERE storage IS NULL").run(); } catch {}
+    // otps.expires_at：兑换码有效期。旧库建表时没有这列，
+    // 而 handleCreateOtp 要写入它 → Workers 抛未捕获异常 → 接口返回 "error code: 1101"。
+    try { await env.DB.prepare("ALTER TABLE otps ADD COLUMN expires_at TEXT").run(); } catch {}
   } catch {}
+}
+
+// 轻量补列：只补 otps 表缺的 expires_at 列。
+// 兑换码相关接口（生成/列表/兑换/撤销）在调用前先跑这个，
+// 避免旧库缺列时 SELECT/INSERT 直接抛未捕获异常（Workers 返回 "error code: 1101"）。
+async function ensureOtpColumns(env: Env): Promise<void> {
+  try { await env.DB.prepare("ALTER TABLE otps ADD COLUMN expires_at TEXT").run(); } catch {}
 }
 
 async function handleLogin(request: Request, env: Env): Promise<Response> {
@@ -687,6 +697,8 @@ async function handleCreateOtp(request: Request, env: Env): Promise<Response> {
   if (!user || user.role !== "root-admin") {
     return json({ error: "兑换码仅可由 Root-Admin 生成" }, 403);
   }
+  // 自愈：确保 otps.expires_at 列存在（老库缺列会让 INSERT 抛未捕获异常 → error code 1101）
+  await ensureOtpColumns(env);
   let body: { amount?: number };
   try {
     body = await request.json();
@@ -704,9 +716,21 @@ async function handleCreateOtp(request: Request, env: Env): Promise<Response> {
     return json({ error: "有效期限限 1-14 天" }, 400);
   }
   const expiresAt = new Date(Date.now() + days * 86400000).toISOString();
-  await env.DB.prepare(
-    "INSERT INTO otps (code, amount, created_by, used_by, used_at, expires_at, created_at) VALUES (?, ?, ?, NULL, NULL, ?, ?)"
-  ).bind(code, amount, user.username, expiresAt, now).run();
+  try {
+    await env.DB.prepare(
+      "INSERT INTO otps (code, amount, created_by, used_by, used_at, expires_at, created_at) VALUES (?, ?, ?, NULL, NULL, ?, ?)"
+    ).bind(code, amount, user.username, expiresAt, now).run();
+  } catch (e) {
+    // 旧库可能缺列（例如 otps.expires_at），补一次列再重试
+    try { await env.DB.prepare("ALTER TABLE otps ADD COLUMN expires_at TEXT").run(); } catch {}
+    try {
+      await env.DB.prepare(
+        "INSERT INTO otps (code, amount, created_by, used_by, used_at, expires_at, created_at) VALUES (?, ?, ?, NULL, NULL, ?, ?)"
+      ).bind(code, amount, user.username, expiresAt, now).run();
+    } catch (e2) {
+      return json({ error: "生成失败：数据库写入异常（" + String(e2).slice(0, 120) + "）" }, 500);
+    }
+  }
   await writeAdminLog(env, user.username, "create_otp", "生成 " + amount + " Credits 兑换码 " + code.slice(0, 4) + "****（" + days + " 天有效）");
   return json({ ok: true, code, amount, days });
 }
@@ -717,6 +741,7 @@ async function handleListOtps(request: Request, env: Env): Promise<Response> {
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
   if (user.role !== "root-admin") return json({ error: "仅 Root-Admin 可查看兑换码" }, 403);
+  await ensureOtpColumns(env);
   const { results } = await env.DB.prepare(
     "SELECT code, amount, created_by, expires_at, created_at FROM otps WHERE used_by IS NULL ORDER BY created_at DESC LIMIT 50"
   ).all<{ code: string; amount: number; created_by: string; expires_at: string | null; created_at: string }>();
@@ -742,6 +767,7 @@ async function handleRevokeOtp(request: Request, env: Env): Promise<Response> {
   } catch {
     return json({ error: "请求格式错误" }, 400);
   }
+  await ensureOtpColumns(env);
   const raw = (body.code || "").trim();
   if (!raw) return json({ error: "缺少兑换码" }, 400);
 
@@ -769,6 +795,7 @@ async function handleRevokeOtp(request: Request, env: Env): Promise<Response> {
 async function redeemOtp(env: Env, username: string, code: string): Promise<Response> {
   const trimmed = (code || "").trim();
   if (!trimmed) return json({ error: "兑换码不能为空" }, 400);
+  await ensureOtpColumns(env);
   const row = await env.DB.prepare("SELECT amount, used_by, expires_at FROM otps WHERE code = ?").bind(trimmed).first<{ amount: number; used_by: string | null; expires_at: string | null }>();
   if (!row) return json({ error: "兑换码不存在" }, 404);
   if (row.used_by) return json({ error: "该兑换码已被使用" }, 409);
@@ -2225,6 +2252,7 @@ export class Room {
     if (cmd === "redeem") {
       const code = parts[1] || "";
       if (!code) { reply("用法：/redeem <兑换码>"); return; }
+      await ensureOtpColumns(this.env);
       const row = await this.env.DB.prepare("SELECT amount, used_by, expires_at FROM otps WHERE code = ?").bind(code).first<{ amount: number; used_by: string | null; expires_at: string | null }>();
       if (!row) { reply("兑换码不存在"); return; }
       if (row.used_by) { reply("该兑换码已被使用"); return; }
