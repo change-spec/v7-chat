@@ -22,14 +22,17 @@ async function call(method, path, opts) {
   return { status: r.status, data };
 }
 
+// 内置账号口令一律从环境变量注入，绝不写进仓库（本仓库是 public）。
+// 用法：V7_SEED_PASSWORDS='{"deportee":"...","change-spec":"..."}' node e2e_accounts_v3.js
+const PWD = process.env.V7_SEED_PASSWORDS ? JSON.parse(process.env.V7_SEED_PASSWORDS) : {};
 const SEED = [
-  ["deportee",        "RA-541418081",      "root-admin"],
-  ["change-spec",     "change-541418081",  "admin"],
-  ["git-k",           "git-2401306030332", "admin"],
-  ["kenkin",          "kk-2401306030332",  "admin"],
-  ["big-energy",      "be-2401306030332",  "admin"],
-  ["teacher-student", "ts-2401306030332",  "admin"],
-];
+  ["deportee", "root-admin"],
+  ["change-spec", "admin"],
+  ["git-k", "admin"],
+  ["kenkin", "admin"],
+  ["big-energy", "admin"],
+  ["teacher-student", "admin"]
+].map(function (x) { return [x[0], PWD[x[0]] || "", x[1]]; });
 
 (async () => {
   console.log("=== 0. 打开首页触发内置账号自愈 ===");
@@ -54,11 +57,11 @@ const SEED = [
 
   console.log("\n=== 3. 内置账号不可注销 / 不可额外创建管理员 ===");
   const deact = await call("POST", "/api/admin/deactivate", {
-    token: raTok, body: { username: "change-spec", password: "RA-541418081" }
+    token: raTok, body: { username: "change-spec", password: PWD["deportee"] || "" }
   });
   ok("五个管理员之一不可注销", deact.status === 403, "status=" + deact.status + " " + JSON.stringify(deact.data));
   const selfDeact = await call("POST", "/api/admin/deactivate", {
-    token: raTok, body: { username: "deportee", password: "RA-541418081" }
+    token: raTok, body: { username: "deportee", password: PWD["deportee"] || "" }
   });
   ok("Root-Admin 自身不可注销", selfDeact.status === 400 || selfDeact.status === 403, "status=" + selfDeact.status);
   const extraAdmin = await call("POST", "/api/admin/create-account", {
@@ -66,7 +69,7 @@ const SEED = [
   });
   ok("不可额外创建管理员账号", extraAdmin.status === 403, "status=" + extraAdmin.status);
   // 注销后账号必须还在
-  const still = await call("POST", "/api/login", { body: { username: "change-spec", password: "change-541418081" } });
+  const still = await call("POST", "/api/login", { body: { username: "change-spec", password: PWD["change-spec"] || "" } });
   ok("注销尝试后管理员账号仍存在", still.status === 200);
 
   console.log("\n=== 4. RA 创建凭据：只发凭据，不建账号 ===");

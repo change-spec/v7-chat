@@ -51,3 +51,7 @@ ui_final.html
 ui_chat.html
 ui_kb.html
 live_snap.html
+
+# 内置账号口令种子（本地保存，绝不入库）
+*seed-passwords*
+.seed-passwords.json
