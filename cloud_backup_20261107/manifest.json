@@ -1,0 +1,91 @@
+{
+  "time": "2026-11-07 15:04:59",
+  "files": [
+    {
+      "id": "cmw5rxguwrkch",
+      "name": "VID_20261107_094927.mp4",
+      "size": 39778513,
+      "error": "<HTTPError 500: 'Internal Server Error'>",
+      "ok": false
+    },
+    {
+      "id": "cmw5ry8srt4th",
+      "name": "IMG_20261107_094332.jpg",
+      "size": 4246193,
+      "storage": "supabase",
+      "mime": "image/jpeg",
+      "owner": "deportee",
+      "backup": "IMG_20261107_094332.jpg",
+      "bytes": 4246193,
+      "sha256": "07b27f847e0efb57fed71ab86ebfdbf59fd098e7e6eaa72f71286382fb869126",
+      "ok": true
+    },
+    {
+      "id": "cmw5rzwlfl5sq",
+      "name": "IMG_20261107_094317.jpg",
+      "size": 4135307,
+      "storage": "supabase",
+      "mime": "image/jpeg",
+      "owner": "deportee",
+      "backup": "IMG_20261107_094317.jpg",
+      "bytes": 4135307,
+      "sha256": "cd8969af65d139ef5d588aeffb11fe8639392d968083b2ebd4dad6ad1e538f8a",
+      "ok": true
+    },
+    {
+      "id": "cmw5s1080s0ly",
+      "name": "VID_20261107_095053.mp4",
+      "size": 41015874,
+      "error": "<HTTPError 500: 'Internal Server Error'>",
+      "ok": false
+    },
+    {
+      "id": "cmw5s4egq09le",
+      "name": "IMG_20261107_094327.jpg",
+      "size": 3738634,
+      "storage": "supabase",
+      "mime": "image/jpeg",
+      "owner": "deportee",
+      "backup": "IMG_20261107_094327.jpg",
+      "bytes": 3738634,
+      "sha256": "1214550ea0854dcb1023c35632c9f7cdad20072205a770b1580f7e6ae5fd0d1e",
+      "ok": true
+    },
+    {
+      "id": "cmw5s4ogb4834",
+      "name": "VID_20261107_094622.mp4",
+      "size": 33601875,
+      "storage": "d1",
+      "mime": "video/mp4",
+      "owner": "deportee",
+      "backup": "VID_20261107_094622.mp4",
+      "bytes": 33601875,
+      "sha256": "30e531fd0026d8f27e819b52d41c6c3f1f2580173381e9b4c44418b6ec1199b9",
+      "ok": true
+    },
+    {
+      "id": "cmw5s5pri2f54",
+      "name": "1794018230818.jpg",
+      "size": 5561762,
+      "storage": "supabase",
+      "mime": "image/jpeg",
+      "owner": "deportee",
+      "backup": "1794018230818.jpg",
+      "bytes": 5561762,
+      "sha256": "89952e77dd7be4780ab679f562325b7a3793770ac35c798e6ee371d6400c858c",
+      "ok": true
+    },
+    {
+      "id": "cmw5sl3koslrs",
+      "name": "VID_20261107_103600.mp4",
+      "size": 28732555,
+      "storage": "d1",
+      "mime": "video/mp4",
+      "owner": "deportee",
+      "backup": "VID_20261107_103600.mp4",
+      "bytes": 28732555,
+      "sha256": "c8e44f256095d58545496257e3f5abd504c8f12ef5555d306218630ea986c446",
+      "ok": true
+    }
+  ]
+}

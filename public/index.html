@@ -104,6 +104,18 @@
   .credits-card .p-label { font-size: 10px; letter-spacing: 3px; color: var(--dim); }
   .credits-card .p-value { font-size: 30px; font-weight: 700; color: #fff; line-height: 1.2; text-shadow: 0 0 12px rgba(0,240,255,.8); }
   .credits-card .p-save { font-size: 10px; color: var(--dim); margin-top: 6px; letter-spacing: 1px; }
+  .credits-card .p-time { font-size: 10.5px; color: var(--cyan); margin-top: 7px; letter-spacing: .5px; font-variant-numeric: tabular-nums; opacity: .85; }
+  .credits-card .p-date { font-size: 9.5px; color: var(--dim); margin-top: 2px; }
+  /* 云空间试用活动区 */
+  .trial-zone { margin-top: 16px; padding: 14px 15px; border: 1px solid rgba(0,240,255,.35); border-radius: 10px; background: rgba(0,240,255,.035); }
+  .trial-zone .tz-title { font-size: 12.5px; letter-spacing: 1.5px; color: var(--cyan); margin-bottom: 8px; }
+  .trial-zone .tz-note { font-size: 11px; color: var(--dim); line-height: 1.9; margin-bottom: 10px; }
+  .trial-zone .tz-note b { color: var(--amber); font-weight: 400; }
+  .trial-zone .tz-count { font-size: 12px; color: var(--amber); font-variant-numeric: tabular-nums; margin: 8px 0; }
+  .trial-zone .tz-closed { font-size: 12px; color: var(--dim); padding: 10px 0; }
+  .trial-files { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .trial-file { display: flex; align-items: center; gap: 8px; font-size: 11.5px; border-top: 1px dashed var(--line); padding-top: 6px; }
+  .trial-file .tf-name { flex: 1; word-break: break-all; }
   .side-foot { margin-top: auto; font-size: 10.5px; color: var(--dim); line-height: 1.7; }
   .side-foot b { color: #00ff96; font-weight: 400; }
   .btn-admin-toggle { display: none; }
@@ -545,6 +557,8 @@
     <div class="side-card credits-card">
       <div class="p-label">CREDITS</div>
       <div class="p-value" id="pts">0</div>
+      <div class="p-time" id="bjClock">北京时间 --:--:--</div>
+      <div class="p-date" id="bjDate">----/--/--</div>
     </div>
     <div class="side-foot">
       <b>多设备</b>：手机/电脑/iPad 同网址登录同步
@@ -617,21 +631,21 @@
 
     <div class="panel hidden" id="gameLobby">
       <h2>▸ 游戏大厅 · 棋类仅真人对战，不支持 AI</h2>
-      <p class="hint" style="margin:0 0 14px">⚠ SHOP 游戏故障，房间号暂停售卖 · 已购房间号不受影响，来下方「输入房间号加入」</p>
+      <p class="hint" style="margin:0 0 14px">所有游戏的游戏引擎均被查出故障，游戏功能暂时无法上线，感谢您的配合</p>
       <div class="lobby-grid">
         <div class="lobby-card">
           <div class="t">♟ 国际象棋</div>
-          <div class="d">5 Credits / 局 · 房间号暂不可购买（SHOP 故障）</div>
+          <div class="d">5 Credits / 局 · 游戏功能暂未上线</div>
           <button class="btn small magenta wide" data-game-join="chess">输入房间号加入</button>
         </div>
         <div class="lobby-card">
           <div class="t">♞ 中国象棋</div>
-          <div class="d">5 Credits / 局 · 房间号暂不可购买（SHOP 故障）</div>
+          <div class="d">5 Credits / 局 · 游戏功能暂未上线</div>
           <button class="btn small magenta wide" data-game-join="xiangqi">输入房间号加入</button>
         </div>
         <div class="lobby-card">
           <div class="t">🍬 消消乐</div>
-          <div class="d">10 Credits / 局 · 单人连线消除 · 房间号暂不可购买（SHOP 故障）</div>
+          <div class="d">10 Credits / 局 · 单人连线消除 · 游戏功能暂未上线</div>
         </div>
       </div>
       <div class="field hidden" id="joinRoomBox" style="margin-top:14px">
@@ -649,8 +663,8 @@
       <h2>▸ SHOP · 房间号商店</h2>
       <div class="shop-closed">
         <div class="big">🕹️</div>
-        <div class="t">游戏故障 · 暂停营业</div>
-        <div class="d">所有游戏均暂时故障，SHOP 不售卖房间号，也不会扣除任何 Credits。<br>已购买的房间号不受影响，仍可在游戏大厅「输入房间号加入」。<br>修复后 SHOP 会重新开张，敬请期待。</div>
+        <div class="t">游戏引擎故障 · 暂停营业</div>
+        <div class="d">所有游戏的游戏引擎均被查出故障，游戏功能暂时无法上线，感谢您的配合</div>
       </div>
       <div class="err" id="shopErr"></div>
 
@@ -696,10 +710,10 @@
 
       <div id="cloudBuyBox" class="cloud-section hidden">
         <div class="field">
-          <label>购买云空间（MB）· 1190 Credits/MB/月 · 每账号限购 60MB</label>
+          <label>购买云空间（MB）· 1190 Credits/MB/月 · <span id="cloudCapHint">每账号限购 60MB</span></label>
           <input id="cloudBuyMb" type="number" min="1" max="60" value="10">
         </div>
-        <label class="ck"><input type="checkbox" id="cloudAutoRenew"> 自动续费（到期自动扣费续一个月）</label>
+        <div class="hint" style="text-align:left;margin:0 0 8px">自动续费 <b>强制开启、不可关闭</b>：到期前 20 分钟按原价自动扣费续期；若 Credits 不足，到期后会把全部文件下载到本机，再收回空间。</div>
         <button class="btn wide" id="btnCloudBuy">▸ 购买云空间</button>
         <div class="err" id="cloudBuyErr"></div>
       </div>
@@ -720,14 +734,26 @@
 
       <div id="cloudManageBox" class="cloud-section hidden">
         <div class="rl-title">▸ 管理</div>
-        <label class="ck"><input type="checkbox" id="cloudAutoRenewToggle"> 自动续费</label>
+        <div class="hint" style="text-align:left;margin:0 0 8px">自动续费：<b>强制开启 · 按原价 · 不可调整</b></div>
         <div style="display:flex;gap:10px;margin:8px 0">
           <input id="cloudUnsubMb" type="number" min="1" placeholder="退订 MB" style="width:120px">
           <button class="btn small magenta" id="btnCloudUnsubMb">▸ 按 MB 退订</button>
         </div>
         <button class="btn small" id="btnCloudUnsub">▸ 退订全部云空间</button>
         <div class="err" id="cloudManageErr"></div>
-        <div class="hint">退订后文件保留至到期；到期未续费将自动清除（请提前下载本机）</div>
+        <div class="hint">到期前 20 分钟按原价自动续费；Credits 不足时，到期后全部文件会先下载到本机，再收回空间。</div>
+      </div>
+
+      <div id="trialZone" class="trial-zone">
+        <div class="tz-title">🎁 云空间 7 天试用活动</div>
+        <div class="tz-note" id="trialNote">
+          每个账号最多可申请 <b>5MB</b> 云空间，<b>7 天</b>有效。此空间与上方主空间<b>完全分离</b>，单独计费、单独存放。<br>
+          活动时间：<b>2026/11/07 16:00 ~ 2026/12/14 16:00</b>（北京时间）。<br>
+          ⚠ <b>试用期结束后收回空间时，如果里面还有文件，系统会先把全部文件下载到本机，确认落盘后才删除服务器副本</b>；未下载成功的文件会保留，不会丢失。
+        </div>
+        <div class="tz-count" id="trialCount">活动状态检测中…</div>
+        <div id="trialBody"></div>
+        <div class="err" id="trialErr"></div>
       </div>
 
       <div class="tool-row"><button class="btn small magenta" id="btnCloudBack">▸ 返回聊天</button></div>
@@ -3297,6 +3323,7 @@
     if (!r.ok) { document.getElementById('cloudStatusBox').textContent = '加载失败'; return; }
     renderCloud(r.data);
     await loadCloudFiles();
+    if (document.getElementById('trialZone')) loadTrial();
   }
   function csRow(k, v) { return '<div class="cs-row"><span class="cs-k">' + k + '</span><span class="cs-v">' + v + '</span></div>'; }
   function renderCloud(s) {
@@ -3312,15 +3339,21 @@
     rows += csRow('每账号上限', s.capMb + ' MB');
     if (s.kind === 'paid') {
       rows += csRow('到期', s.expired ? '已过期' : (s.expiresAt || '-'));
-      rows += csRow('自动续费', s.autoRenew ? '开' : '关');
+      rows += csRow('自动续费', '强制开启 · 按原价');
+      rows += csRow('下次续费', '到期前 20 分钟自动扣 ' + (s.renewCost || 0) + ' Credits');
     }
     box.innerHTML = '<div class="cs-rows">' + rows + '</div><div class="cs-bar"><div class="cs-fill" style="width:' + pct + '%"></div></div>';
     var showBuy = !s.isRA && (s.kind === 'none' || s.expired);
     document.getElementById('cloudBuyBox').classList.toggle('hidden', !showBuy);
     document.getElementById('cloudManageBox').classList.toggle('hidden', !(s.isRA === false && s.kind === 'paid'));
-    document.getElementById('cloudAutoRenewToggle').checked = !!s.autoRenew;
+    var capEl = document.getElementById('cloudCapHint');
+    if (capEl) capEl.textContent = '每账号限购 ' + s.capMb + 'MB';
     var maxMb = s.isRA ? 0 : Math.max(1, s.capMb - s.totalMb);
     document.getElementById('cloudBuyMb').max = String(maxMb);
+    // 到期未续费：先把全部文件下载到本机，确认落盘后再收回空间
+    if (s.reclaimPending && s.reclaimFiles && s.reclaimFiles.length && !mainReclaiming) {
+      reclaimMainSpace(s.reclaimFiles);
+    }
   }
   async function loadCloudFiles() {
     var r = await api('/api/cloud/list');
@@ -3414,10 +3447,9 @@
   });
   document.getElementById('btnCloudBuy').addEventListener('click', async function () {
     var mb = Math.floor(Number(document.getElementById('cloudBuyMb').value) || 0);
-    var auto = document.getElementById('cloudAutoRenew').checked;
     var err = document.getElementById('cloudBuyErr'); err.textContent = '';
     try {
-      var r = await api('/api/cloud/buy', { mb: mb, autoRenew: auto });
+      var r = await api('/api/cloud/buy', { mb: mb });
       if (!r.ok) { err.textContent = r.data.error || '购买失败'; return; }
       loadCloud();
     } catch (e) { err.textContent = '网络错误'; }
@@ -3435,10 +3467,6 @@
       if (!r.ok) { err.textContent = d.error || ('上传失败（' + r.status + '）'); return; }
       inp.value = ''; loadCloud(); appendSys('已上传到云：' + f.name + '（免费）');
     } catch (e) { err.textContent = '网络错误'; }
-  });
-  document.getElementById('cloudAutoRenewToggle').addEventListener('change', async function () {
-    var on = this.checked;
-    try { await api('/api/cloud/renew', { autoRenew: on }); } catch (e) {}
   });
   document.getElementById('btnCloudUnsubMb').addEventListener('click', async function () {
     var mb = Math.floor(Number(document.getElementById('cloudUnsubMb').value) || 0);
@@ -3513,7 +3541,182 @@
     }
   });
 
-  if (token) enterChat();
+  // ===== 北京时间（UTC+8）实时时钟 + 活动窗口秒级仲裁 =====
+  var TRIAL_START_MS = Date.parse('2026-11-07T08:00:00Z'); // 北京 2026/11/07 16:00
+  var TRIAL_END_MS   = Date.parse('2026-12-14T08:00:00Z'); // 北京 2026/12/14 16:00
+  var trialWindowWasOpen = null;
+  var mainReclaiming = false, trialReclaiming = false;
+
+  function beijingNow() {
+    return new Date(Date.now() + 8 * 3600 * 1000);
+  }
+  function pad2(n) { return n < 10 ? '0' + n : '' + n; }
+  function fmtDur(ms) {
+    if (ms < 0) ms = 0;
+    var s = Math.floor(ms / 1000);
+    var d = Math.floor(s / 86400); s -= d * 86400;
+    var h = Math.floor(s / 3600); s -= h * 3600;
+    var m = Math.floor(s / 60); s -= m * 60;
+    return (d > 0 ? d + '天' : '') + pad2(h) + ':' + pad2(m) + ':' + pad2(s);
+  }
+  function tickBeijing() {
+    var b = beijingNow();
+    var clock = document.getElementById('bjClock');
+    var dateEl = document.getElementById('bjDate');
+    if (clock) clock.textContent = '北京时间 ' + pad2(b.getUTCHours()) + ':' + pad2(b.getUTCMinutes()) + ':' + pad2(b.getUTCSeconds());
+    if (dateEl) dateEl.textContent = b.getUTCFullYear() + '/' + pad2(b.getUTCMonth() + 1) + '/' + pad2(b.getUTCDate()) + ' (UTC+8)';
+    var now = Date.now();
+    var open = now >= TRIAL_START_MS && now < TRIAL_END_MS;
+    var cnt = document.getElementById('trialCount');
+    if (cnt) {
+      if (now < TRIAL_START_MS) cnt.textContent = '距活动开始：' + fmtDur(TRIAL_START_MS - now);
+      else if (now >= TRIAL_END_MS) cnt.textContent = '活动已结束';
+      else cnt.textContent = '活动进行中 · 距结束：' + fmtDur(TRIAL_END_MS - now);
+    }
+    // 时间一到立刻开始：状态翻转时自动重渲染活动区，无需刷新页面
+    if (trialWindowWasOpen !== null && trialWindowWasOpen !== open) loadTrial();
+    if (trialWindowWasOpen === null) trialWindowWasOpen = open;
+    else trialWindowWasOpen = open;
+  }
+  setInterval(tickBeijing, 1000);
+  tickBeijing();
+
+  // 页面开着时每分钟 ping 一次状态：触发服务端「到期前 20 分钟自动续费」与到期收回检查
+  setInterval(function () {
+    if (!token) return;
+    if (!document.getElementById('cloudPanel') || document.getElementById('cloudPanel').classList.contains('hidden')) return;
+    loadCloud();
+  }, 60000);
+
+  // ===== 主空间到期收回：先全部落盘，确认后才让服务端删除 =====
+  async function reclaimMainSpace(files) {
+    if (mainReclaiming) return;
+    mainReclaiming = true;
+    appendSys('云空间已到期且 Credits 不足，正在把 ' + files.length + ' 个文件下载到本机…');
+    var done = [];
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i];
+      try {
+        var resp = await fetch('/api/cloud/file?id=' + encodeURIComponent(f.id), { headers: { Authorization: 'Bearer ' + token } });
+        if (!resp.ok) continue;
+        var blob = await resp.blob();
+        var res = await saveBlobToDisk(blob, f.name);
+        if (res && !res.cancelled) done.push(f.id);
+      } catch (e) {}
+    }
+    if (done.length) {
+      await api('/api/cloud/reclaim-done', { downloadedIds: done });
+      appendSys('已保存到本机 ' + done.length + '/' + files.length + ' 个文件；未成功下载的仍保留在服务器上。');
+    }
+    mainReclaiming = false;
+    loadCloud();
+  }
+
+  // ===== 试用活动区 =====
+  async function loadTrial() {
+    var body = document.getElementById('trialBody');
+    if (!body) return;
+    var r = await api('/api/cloud/trial/status');
+    if (!r.ok) { body.innerHTML = '<div class="tz-closed">活动状态加载失败</div>'; return; }
+    var d = r.data, now = Date.now();
+    var err = document.getElementById('trialErr'); if (err) err.textContent = '';
+    // 已到期且还有文件 → 自动下载全部，落盘确认后收回
+    if (d.reclaimPending && d.files && d.files.length) {
+      body.innerHTML = '<div class="tz-closed">试用期已结束，正在把 ' + d.files.length + ' 个文件下载到本机…</div>';
+      reclaimTrial(d.files);
+      return;
+    }
+    // 活动窗口未开 / 已结束
+    if (now < TRIAL_START_MS) {
+      body.innerHTML = '<div class="tz-closed">活动尚未开始（北京时间 2026/11/07 16:00 准时开放）。</div>';
+      return;
+    }
+    if (now >= TRIAL_END_MS && !d.trial) {
+      body.innerHTML = '<div class="tz-closed">活动已结束，未申请的账号无法再申请。</div>';
+      return;
+    }
+    // 未申请
+    if (!d.trial) {
+      body.innerHTML = '<button class="btn wide" id="btnTrialClaim">▸ 立即申请 5MB / 7 天试用</button>';
+      document.getElementById('btnTrialClaim').addEventListener('click', async function () {
+        var rr = await api('/api/cloud/trial/claim', {});
+        if (!rr.ok) { document.getElementById('trialErr').textContent = rr.data.error || '申请失败'; return; }
+        appendSys('已申请 5MB 云空间 7 天试用');
+        loadTrial();
+      });
+      return;
+    }
+    // 已申请且未到期
+    var t = d.trial;
+    var html = '<div class="cs-row"><span class="cs-k">试用空间</span><span class="cs-v">' +
+      (Math.round(t.usedMb * 100) / 100) + ' / ' + t.totalMb + ' MB</span></div>' +
+      '<div class="cs-row"><span class="cs-k">到期</span><span class="cs-v">' + (t.expiresAt || '-') + '</span></div>' +
+      '<div class="field" style="margin-top:10px"><label>上传文件到试用空间（独立存放）</label>' +
+      '<input type="file" id="trialFile"></div>' +
+      '<button class="btn small" id="btnTrialUpload">▸ 上传</button> ' +
+      '<button class="btn small magenta" id="btnTrialFinish">▸ 提前结束并下载全部文件</button>' +
+      '<div class="trial-files" id="trialFiles"></div>';
+    body.innerHTML = html;
+    document.getElementById('btnTrialUpload').addEventListener('click', async function () {
+      var inp = document.getElementById('trialFile');
+      var f = inp.files && inp.files[0];
+      if (!f) { document.getElementById('trialErr').textContent = '请先选择文件'; return; }
+      var rr = await fetch('/api/cloud/trial/upload?name=' + encodeURIComponent(f.name) + '&mime=' + encodeURIComponent(f.type || 'application/octet-stream'), {
+        method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: f
+      });
+      var dd = {}; try { dd = await rr.json(); } catch (e) {}
+      if (!rr.ok) { document.getElementById('trialErr').textContent = dd.error || '上传失败'; return; }
+      inp.value = ''; loadTrial();
+    });
+    document.getElementById('btnTrialFinish').addEventListener('click', async function () {
+      if (!confirm('提前结束试用？全部文件会先下载到本机，再收回空间。')) return;
+      var st = await api('/api/cloud/trial/status');
+      if (st.ok && st.data.files) reclaimTrial(st.data.files);
+    });
+    var fl = document.getElementById('trialFiles');
+    (d.files || []).forEach(function (f) {
+      var row = document.createElement('div'); row.className = 'trial-file';
+      var nm = document.createElement('span'); nm.className = 'tf-name'; nm.textContent = f.name + '（' + fmtSize(f.size) + '）';
+      var dl = document.createElement('button'); dl.className = 'btn small'; dl.textContent = '下载';
+      dl.addEventListener('click', async function () {
+        var rr = await fetch('/api/cloud/trial/file?id=' + encodeURIComponent(f.id), { headers: { Authorization: 'Bearer ' + token } });
+        if (!rr.ok) return;
+        var bl = await rr.blob();
+        saveBlobToDisk(bl, f.name);
+      });
+      var del = document.createElement('button'); del.className = 'btn small magenta'; del.textContent = '删除';
+      del.addEventListener('click', async function () {
+        if (!confirm('删除「' + f.name + '」？')) return;
+        await api('/api/cloud/trial/delete', { id: f.id }); loadTrial();
+      });
+      row.appendChild(nm); row.appendChild(dl); row.appendChild(del); fl.appendChild(row);
+    });
+  }
+
+  // 试用期结束：先把所有文件下载到本机，确认落盘后才让服务端删除、收回空间
+  async function reclaimTrial(files) {
+    if (trialReclaiming) return;
+    trialReclaiming = true;
+    var done = [];
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i];
+      try {
+        var resp = await fetch('/api/cloud/trial/file?id=' + encodeURIComponent(f.id), { headers: { Authorization: 'Bearer ' + token } });
+        if (!resp.ok) continue;
+        var blob = await resp.blob();
+        var res = await saveBlobToDisk(blob, f.name);
+        if (res && !res.cancelled) done.push(f.id);
+      } catch (e) {}
+    }
+    if (done.length) {
+      await api('/api/cloud/trial/finish', { downloadedIds: done });
+      appendSys('试用空间：已保存到本机 ' + done.length + '/' + files.length + ' 个文件；未成功下载的仍保留。');
+    }
+    trialReclaiming = false;
+    loadTrial();
+  }
+
+    if (token) enterChat();
 })();
 </script>
 

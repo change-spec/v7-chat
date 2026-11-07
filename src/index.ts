@@ -576,6 +576,32 @@ async function ensureSchema(env: Env): Promise<void> {
         deliver TEXT,
         created_at TEXT NOT NULL
       )`),
+      // 云空间试用（独立于主空间，不动 cloud_files）
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS cloud_trials (
+        username TEXT PRIMARY KEY,
+        total_mb INTEGER NOT NULL DEFAULT 5,
+        used_mb REAL NOT NULL DEFAULT 0,
+        starts_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        reclaim_pending INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+      )`),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS cloud_trial_files (
+        id TEXT PRIMARY KEY,
+        owner TEXT NOT NULL,
+        name TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        mime TEXT,
+        data TEXT NOT NULL,
+        storage TEXT,
+        created_at TEXT NOT NULL
+      )`),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS cloud_trial_chunks (
+        file_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        data TEXT NOT NULL,
+        PRIMARY KEY (file_id, seq)
+      )`),
       env.DB.prepare(`CREATE TABLE IF NOT EXISTS admin_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         admin TEXT NOT NULL,
@@ -672,6 +698,8 @@ async function ensureSchema(env: Env): Promise<void> {
     try { await env.DB.prepare("ALTER TABLE otps ADD COLUMN expires_at TEXT").run(); } catch {}
     // market_orders.deliver：成交后买家的接收方式（cloud / download），旧库补列
     try { await env.DB.prepare("ALTER TABLE market_orders ADD COLUMN deliver TEXT").run(); } catch {}
+    // cloud_subs.reclaim_pending：到期未续费、等待把文件下载到本机后收回空间
+    try { await env.DB.prepare("ALTER TABLE cloud_subs ADD COLUMN reclaim_pending INTEGER NOT NULL DEFAULT 0").run(); } catch {}
   } catch {}
 }
 
@@ -1311,9 +1339,23 @@ async function handleFileGet(request: Request, env: Env): Promise<Response> {
 
 // ===== 云存储 =====
 const CLOUD_COST_PER_MB = 1190;
-const CLOUD_CAP_MB = 60;
-const RA_CLOUD_MB = 1024; // Root-Admin 专属免费云空间：1GB 永久（Supabase Storage 免费额度内）
+const RA_CLOUD_MB = 2048; // Root-Admin 免费永久云空间：2GB
 const CLOUD_MONTH_MS = 30 * 24 * 3600 * 1000;
+const AUTO_RENEW_WINDOW_MS = 20 * 60 * 1000; // 到期前 20 分钟按原价自动续费
+
+// 按角色的可购买上限（MB）：Admin 100 / member 60 / 观测者 10
+function cloudCapForRole(role: string): number {
+  if (role === "admin") return 100;
+  if (role === "observer") return 10;
+  return 60;
+}
+
+// ===== 云空间 7 天试用活动（北京时间 UTC+8）=====
+// 与主空间完全隔离：独立表 + 独立接口，绝不碰 cloud_files（RA 的重要文件在那）
+const TRIAL_MB = 5;
+const TRIAL_DAYS = 7;
+const TRIAL_START_MS = Date.parse("2026-11-07T08:00:00Z"); // 北京 2026/11/07 16:00
+const TRIAL_END_MS = Date.parse("2026-12-14T08:00:00Z");   // 北京 2026/12/14 16:00
 // Supabase Storage 接入参数
 const SB_BUCKET = "cloud-files";
 const SB_PATH_PREFIX = "cloud/";
@@ -1350,45 +1392,66 @@ async function ensureRASub(env: Env, user: { username: string; role: string }): 
 async function cloudStatus(env: Env, user: { username: string; role: string }): Promise<any> {
   await ensureRASub(env, user);
   const isRA = user.role === "root-admin";
-  const balance = await pointsOf(env, user.username);
+  let balance = await pointsOf(env, user.username);
   const used = await sumCloudUsed(env, user.username);
   const files = await countCloudFiles(env, user.username);
+  const capMb = cloudCapForRole(user.role);
   if (isRA) {
     return {
       isRA: true, kind: "free", totalMb: RA_CLOUD_MB, usedMb: used / (1024 * 1024),
-      expiresAt: "永久", autoRenew: false, expired: false, hasFiles: files > 0, fileCount: files,
-      costPerMb: CLOUD_COST_PER_MB, capMb: RA_CLOUD_MB, balance
+      expiresAt: "永久", autoRenew: true, expired: false, hasFiles: files > 0, fileCount: files,
+      costPerMb: CLOUD_COST_PER_MB, capMb: RA_CLOUD_MB, balance,
+      reclaimPending: false, reclaimFiles: []
     };
   }
   const sub = await getCloudSub(env, user.username);
   let expired = false;
   let expiresAt: string | null = null;
+  let reclaimPending = false;
+  let renewed = false;
+  let renewCost = sub ? sub.total_mb * CLOUD_COST_PER_MB : 0; // 原价，按订阅总 MB 算
   if (sub) {
     expiresAt = sub.expires_at;
-    if (sub.kind !== "free" && sub.expires_at && new Date(sub.expires_at).getTime() < Date.now()) {
-      expired = true;
-      if (sub.auto_renew) {
-        const cost = sub.total_mb * CLOUD_COST_PER_MB;
-        if (balance >= cost) {
-          await spendCredits(env, user.username, cost);
-          await logCredits(env, user.username, -cost, "云空间自动续费");
-          const next = new Date(Date.now() + CLOUD_MONTH_MS).toISOString();
-          await env.DB.prepare("UPDATE cloud_subs SET expires_at = ?, used_mb = ? WHERE username = ?")
-            .bind(next, used / (1024 * 1024), user.username).run();
-          expired = false; expiresAt = next;
-        }
+    const expMs = sub.expires_at ? new Date(sub.expires_at).getTime() : 0;
+    const nowMs = Date.now();
+    // 自动续费强制开启、不可关闭：到期前 20 分钟窗口内，Credits 足够则按原价直接扣费续期
+    if (sub.kind !== "free" && expMs > nowMs && expMs - nowMs <= AUTO_RENEW_WINDOW_MS) {
+      if (balance >= renewCost) {
+        await spendCredits(env, user.username, renewCost);
+        await logCredits(env, user.username, -renewCost, "云空间自动续费（原价 " + renewCost + " Credits）");
+        const next = new Date(expMs + CLOUD_MONTH_MS).toISOString();
+        await env.DB.prepare("UPDATE cloud_subs SET expires_at = ?, auto_renew = 1, used_mb = ? WHERE username = ?")
+          .bind(next, used / (1024 * 1024), user.username).run();
+        expiresAt = next; renewed = true; balance -= renewCost;
       }
+      // 余额不足：什么都不做，等到期后走收回流程
+    } else if (sub.kind !== "free" && expMs <= nowMs) {
+      // 已到期且没续上（说明余额不足以原价续费）→ 待收回
+      expired = true;
+      reclaimPending = true;
+      await env.DB.prepare("UPDATE cloud_subs SET reclaim_pending = 1 WHERE username = ?").bind(user.username).run().catch(() => {});
     }
+  }
+  // 待收回时把文件清单一起下发，前端先全部下载到本机，再回来确认删除
+  let reclaimFiles: any[] = [];
+  if (reclaimPending) {
+    const { results } = await env.DB.prepare(
+      "SELECT id, name, size, mime FROM cloud_files WHERE owner = ? ORDER BY created_at ASC"
+    ).bind(user.username).all<any>();
+    reclaimFiles = (results || []).map((r) => ({ id: r.id, name: r.name, size: r.size, mime: r.mime }));
   }
   return {
     isRA: false, kind: sub ? sub.kind : "none", totalMb: sub ? sub.total_mb : 0,
-    usedMb: used / (1024 * 1024), expiresAt, autoRenew: sub ? !!sub.auto_renew : false,
+    usedMb: used / (1024 * 1024), expiresAt, autoRenew: true,
     expired, hasFiles: files > 0, fileCount: files,
-    costPerMb: CLOUD_COST_PER_MB, capMb: CLOUD_CAP_MB, balance
+    costPerMb: CLOUD_COST_PER_MB, capMb, balance,
+    renewCost, renewed, autoRenewWindowMin: AUTO_RENEW_WINDOW_MS / 60000,
+    reclaimPending, reclaimFiles
   };
 }
 
 async function handleCloudStatus(request: Request, env: Env): Promise<Response> {
+  await ensureSchema(env);
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
   return json(await cloudStatus(env, user));
@@ -1404,7 +1467,8 @@ async function handleCloudBuy(request: Request, env: Env): Promise<Response> {
   if (mb < 1) return json({ error: "至少购买 1MB" }, 400);
   const sub = await getCloudSub(env, user.username);
   const cur = sub ? sub.total_mb : 0;
-  if (cur + mb > CLOUD_CAP_MB) return json({ error: "超出上限：当前已购 " + cur + "MB，每账号最多 " + CLOUD_CAP_MB + "MB" }, 409);
+  const capMb = cloudCapForRole(user.role);
+  if (cur + mb > capMb) return json({ error: "超出上限：当前已购 " + cur + "MB，" + user.role + " 每账号最多 " + capMb + "MB" }, 409);
   const cost = mb * CLOUD_COST_PER_MB;
   const bal = await pointsOf(env, user.username);
   if (bal < cost) return json({ error: "Credits 不足：购买 " + mb + "MB 需 " + cost + " Credits（" + mb + " × " + CLOUD_COST_PER_MB + "）" }, 402);
@@ -1413,7 +1477,7 @@ async function handleCloudBuy(request: Request, env: Env): Promise<Response> {
   const now = new Date();
   if (!sub) {
     await env.DB.prepare("INSERT INTO cloud_subs (username, total_mb, used_mb, expires_at, auto_renew, kind, created_at) VALUES (?, ?, 0, ?, ?, 'paid', ?)")
-      .bind(user.username, mb, new Date(now.getTime() + CLOUD_MONTH_MS).toISOString(), body.autoRenew ? 1 : 0, now.toISOString()).run();
+      .bind(user.username, mb, new Date(now.getTime() + CLOUD_MONTH_MS).toISOString(), 1, now.toISOString()).run();
   } else {
     const curExpired = sub.expires_at && new Date(sub.expires_at).getTime() < Date.now();
     const nextExp = curExpired ? new Date(now.getTime() + CLOUD_MONTH_MS).toISOString() : sub.expires_at;
@@ -1689,12 +1753,231 @@ async function handleCloudRenew(request: Request, env: Env): Promise<Response> {
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
   if (user.role === "root-admin") return json({ error: "Root-Admin 云空间为免费永久" }, 400);
-  let body: { autoRenew?: boolean };
-  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  // 自动续费为强制开启项，用户不可调整；本接口只做状态同步（始终写回 1）
+  try { await request.json(); } catch {}
   const sub = await getCloudSub(env, user.username);
   if (!sub) return json({ error: "你还没有云空间" }, 400);
-  await env.DB.prepare("UPDATE cloud_subs SET auto_renew = ? WHERE username = ?").bind(body.autoRenew ? 1 : 0, user.username).run();
-  return json({ ok: true, ...(await cloudStatus(env, user)) });
+  await env.DB.prepare("UPDATE cloud_subs SET auto_renew = 1 WHERE username = ?").bind(user.username).run();
+  return json({ ok: true, autoRenew: true, ...(await cloudStatus(env, user)) });
+}
+
+// ========== 云空间 7 天试用活动 ==========
+// 与主空间彻底隔离：独立的表 + 独立的 Storage 路径前缀，绝不碰 cloud_files。
+const TRIAL_SB_PREFIX = "trial/";
+
+async function storeTrialBytes(env: Env, fileId: string, bytes: Uint8Array, mime: string): Promise<string> {
+  if (sbEnabled(env)) {
+    try {
+      const url = env.SUPABASE_URL + "/storage/v1/object/" + sbBucket(env) + "/" + TRIAL_SB_PREFIX + fileId;
+      const res = await fetch(url, { method: "POST",
+        headers: sbHeaders(env, { "Content-Type": mime || "application/octet-stream", "x-upsert": "true" }),
+        body: bytes as unknown as BodyInit });
+      if (res.ok) return "supabase";
+    } catch (e) { console.error("试用文件写 Supabase 失败，降级 D1：", e); }
+  }
+  const b64 = bytesToBase64(bytes);
+  const CH = 60000; const inserts: any[] = [];
+  for (let i = 0, seq = 1; i < b64.length; i += CH, seq++) {
+    inserts.push(env.DB.prepare("INSERT INTO cloud_trial_chunks (file_id, seq, data) VALUES (?, ?, ?)").bind(fileId, seq, b64.slice(i, i + CH)));
+    if (inserts.length >= 100) { await env.DB.batch(inserts); inserts.length = 0; }
+  }
+  if (inserts.length) await env.DB.batch(inserts);
+  return "d1";
+}
+
+async function loadTrialBytes(env: Env, fileId: string, storage: string | null): Promise<Uint8Array | null> {
+  if (storage === "supabase" && sbEnabled(env)) {
+    try {
+      const url = env.SUPABASE_URL + "/storage/v1/object/" + sbBucket(env) + "/" + TRIAL_SB_PREFIX + fileId;
+      const res = await fetch(url, { headers: sbHeaders(env) });
+      if (!res.ok) return null;
+      return new Uint8Array(await res.arrayBuffer());
+    } catch (e) { return null; }
+  }
+  const { results } = await env.DB.prepare("SELECT data FROM cloud_trial_chunks WHERE file_id = ? ORDER BY seq ASC")
+    .bind(fileId).all<{ data: string }>();
+  const b64 = (results || []).map((r) => r.data).join("");
+  return b64 ? base64ToBytes(b64) : null;
+}
+
+async function deleteTrialFile(env: Env, id: string, storage: string | null): Promise<void> {
+  if (storage === "supabase" && sbEnabled(env)) {
+    try {
+      const url = env.SUPABASE_URL + "/storage/v1/object/" + sbBucket(env) + "/" + TRIAL_SB_PREFIX + id;
+      await fetch(url, { method: "DELETE", headers: sbHeaders(env) });
+    } catch (e) { console.error("试用文件删除失败：", e); }
+  }
+  await env.DB.prepare("DELETE FROM cloud_trial_chunks WHERE file_id = ?").bind(id).run();
+  await env.DB.prepare("DELETE FROM cloud_trial_files WHERE id = ?").bind(id).run();
+}
+
+function trialWindowOpen(): boolean {
+  const n = Date.now();
+  return n >= TRIAL_START_MS && n < TRIAL_END_MS;
+}
+
+async function trialStatus(env: Env, username: string): Promise<any> {
+  const now = Date.now();
+  const open = trialWindowOpen();
+  const row = await env.DB.prepare("SELECT * FROM cloud_trials WHERE username = ?").bind(username).first<any>();
+  let files: any[] = [];
+  if (row) {
+    const { results } = await env.DB.prepare(
+      "SELECT id, name, size, mime, created_at FROM cloud_trial_files WHERE owner = ? ORDER BY created_at ASC"
+    ).bind(username).all<any>();
+    files = (results || []).map((r) => ({ id: r.id, name: r.name, size: r.size, mime: r.mime, createdAt: r.created_at }));
+  }
+  const expMs = row && row.expires_at ? new Date(row.expires_at).getTime() : 0;
+  const expired = !!row && expMs <= now;
+  return {
+    open, now, startMs: TRIAL_START_MS, endMs: TRIAL_END_MS,
+    trialMb: TRIAL_MB, trialDays: TRIAL_DAYS,
+    beijingTime: new Date(now + 8 * 3600 * 1000).toISOString().replace("T", " ").slice(0, 19),
+    trial: row ? {
+      totalMb: row.total_mb, usedMb: row.used_mb,
+      startsAt: row.starts_at, expiresAt: row.expires_at,
+      expired, reclaimPending: expired && files.length > 0
+    } : null,
+    files, reclaimPending: !!row && expired && files.length > 0
+  };
+}
+
+async function handleTrialStatus(request: Request, env: Env): Promise<Response> {
+  await ensureSchema(env);
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  return json(await trialStatus(env, user.username));
+}
+
+async function handleTrialClaim(request: Request, env: Env): Promise<Response> {
+  await ensureSchema(env);
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  if (!trialWindowOpen()) return json({ error: "活动未开始或已结束（北京时间 2026/11/07 16:00 ~ 2026/12/14 16:00）" }, 409);
+  const exists = await env.DB.prepare("SELECT username FROM cloud_trials WHERE username = ?").bind(user.username).first();
+  if (exists) return json({ error: "每账号限申请一次 5MB 试用空间" }, 409);
+  const now = new Date();
+  const exp = new Date(now.getTime() + TRIAL_DAYS * 24 * 3600 * 1000);
+  await env.DB.prepare(
+    "INSERT INTO cloud_trials (username, total_mb, used_mb, starts_at, expires_at, reclaim_pending, created_at) VALUES (?, ?, 0, ?, ?, 0, ?)"
+  ).bind(user.username, TRIAL_MB, now.toISOString(), exp.toISOString(), now.toISOString()).run();
+  await logCredits(env, user.username, 0, "申请 5MB 云空间 7 天试用");
+  return json({ ok: true, ...(await trialStatus(env, user.username)) });
+}
+
+async function handleTrialUpload(request: Request, env: Env): Promise<Response> {
+  await ensureSchema(env);
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  const t = await env.DB.prepare("SELECT * FROM cloud_trials WHERE username = ?").bind(user.username).first<any>();
+  if (!t) return json({ error: "你还没有申请试用空间" }, 409);
+  if (new Date(t.expires_at).getTime() <= Date.now()) return json({ error: "试用期已结束" }, 409);
+  const url = new URL(request.url);
+  const name = (url.searchParams.get("name") || "file").slice(0, 200);
+  const mime = (url.searchParams.get("mime") || "application/octet-stream").slice(0, 200);
+  let buf: ArrayBuffer;
+  try { buf = await request.arrayBuffer(); } catch { return json({ error: "读取文件失败" }, 400); }
+  const size = buf.byteLength;
+  if (size <= 0) return json({ error: "空文件" }, 400);
+  const used = await env.DB.prepare("SELECT COALESCE(SUM(size),0) AS n FROM cloud_trial_files WHERE owner = ?")
+    .bind(user.username).first<{ n: number }>();
+  const usedBytes = used ? used.n : 0;
+  if (usedBytes + size > TRIAL_MB * 1024 * 1024) {
+    return json({ error: "试用空间不足：已用 " + fmtMB(usedBytes) + "MB / 共 " + TRIAL_MB + "MB" }, 409);
+  }
+  const id = "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const storage = await storeTrialBytes(env, id, new Uint8Array(buf), mime);
+  await env.DB.prepare("INSERT INTO cloud_trial_files (id, owner, name, size, mime, data, storage, created_at) VALUES (?, ?, ?, ?, ?, '', ?, ?)")
+    .bind(id, user.username, name, size, mime, storage, new Date().toISOString()).run();
+  await env.DB.prepare("UPDATE cloud_trials SET used_mb = ? WHERE username = ?")
+    .bind((usedBytes + size) / (1024 * 1024), user.username).run();
+  return json({ ok: true, id, ...(await trialStatus(env, user.username)) });
+}
+
+async function handleTrialFile(request: Request, env: Env): Promise<Response> {
+  await ensureSchema(env);
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  const id = (new URL(request.url).searchParams.get("id") || "").trim();
+  if (!id) return json({ error: "缺少文件" }, 400);
+  const f = await env.DB.prepare("SELECT id, name, size, mime, storage FROM cloud_trial_files WHERE id = ? AND owner = ?")
+    .bind(id, user.username).first<any>();
+  if (!f) return json({ error: "文件不存在或不属于你" }, 404);
+  const bytes = await loadTrialBytes(env, id, f.storage);
+  if (!bytes) return json({ error: "文件数据已丢失" }, 410);
+  const safeName = (f.name || "file").replace(/[\r\n"]/g, "_");
+  return new Response(bytes as unknown as BodyInit, { headers: {
+    "content-type": f.mime || "application/octet-stream",
+    "content-disposition": "attachment; filename=\"" + encodeURIComponent(safeName) + "\"; filename*=UTF-8''" + encodeURIComponent(safeName),
+    "content-length": String(bytes.length), "cache-control": "no-store"
+  } });
+}
+
+async function handleTrialDelete(request: Request, env: Env): Promise<Response> {
+  await ensureSchema(env);
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  let body: { id?: string };
+  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  const id = (body.id || "").trim();
+  const f = await env.DB.prepare("SELECT id, storage FROM cloud_trial_files WHERE id = ? AND owner = ?").bind(id, user.username).first<any>();
+  if (!f) return json({ error: "文件不存在" }, 404);
+  await deleteTrialFile(env, id, f.storage);
+  const used = await env.DB.prepare("SELECT COALESCE(SUM(size),0) AS n FROM cloud_trial_files WHERE owner = ?").bind(user.username).first<{ n: number }>();
+  await env.DB.prepare("UPDATE cloud_trials SET used_mb = ? WHERE username = ?").bind((used ? used.n : 0) / (1024 * 1024), user.username).run();
+  return json({ ok: true, ...(await trialStatus(env, user.username)) });
+}
+
+// 试用期结束：前端把所有文件下载到本机并确认落盘后，才调用本接口收回空间。
+// 只删「确认已下载」的文件；还有没下载成功的就留着，等前端重试，绝不丢文件。
+async function handleTrialFinish(request: Request, env: Env): Promise<Response> {
+  await ensureSchema(env);
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  let body: { downloadedIds?: string[] };
+  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  const ids = Array.isArray(body.downloadedIds) ? body.downloadedIds.slice(0, 200) : [];
+  for (const id of ids) {
+    const f = await env.DB.prepare("SELECT id, storage FROM cloud_trial_files WHERE id = ? AND owner = ?").bind(id, user.username).first<any>();
+    if (f) await deleteTrialFile(env, f.id, f.storage);
+  }
+  const rest = await env.DB.prepare("SELECT COUNT(*) AS n FROM cloud_trial_files WHERE owner = ?").bind(user.username).first<{ n: number }>();
+  const remaining = rest ? rest.n : 0;
+  if (remaining === 0) {
+    await env.DB.prepare("DELETE FROM cloud_trials WHERE username = ?").bind(user.username).run();
+    await logCredits(env, user.username, 0, "试用期结束，文件已下载本机，收回 5MB 试用空间");
+  }
+  return json({ ok: true, remaining, reclaimed: remaining === 0, ...(await trialStatus(env, user.username)) });
+}
+
+// 主空间到期未续费：前端把文件全部下载到本机确认落盘后，才收回空间（只删已下载的）
+async function handleCloudReclaimDone(request: Request, env: Env): Promise<Response> {
+  await ensureSchema(env);
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  let body: { downloadedIds?: string[] };
+  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  const ids = Array.isArray(body.downloadedIds) ? body.downloadedIds.slice(0, 500) : [];
+  for (const id of ids) {
+    const f = await env.DB.prepare("SELECT id, storage FROM cloud_files WHERE id = ? AND owner = ?").bind(id, user.username).first<any>();
+    if (f) {
+      if (f.storage === "supabase" && sbEnabled(env)) {
+        try {
+          const url = env.SUPABASE_URL + "/storage/v1/object/" + sbBucket(env) + "/" + sbObjectPath(f.id);
+          await fetch(url, { method: "DELETE", headers: sbHeaders(env) });
+        } catch (e) { console.error("主空间文件删除失败：", e); }
+      }
+      await env.DB.prepare("DELETE FROM cloud_file_chunks WHERE file_id = ?").bind(f.id).run();
+      await env.DB.prepare("DELETE FROM cloud_files WHERE id = ?").bind(f.id).run();
+    }
+  }
+  const rest = await env.DB.prepare("SELECT COUNT(*) AS n FROM cloud_files WHERE owner = ?").bind(user.username).first<{ n: number }>();
+  const remaining = rest ? rest.n : 0;
+  if (remaining === 0) {
+    await env.DB.prepare("DELETE FROM cloud_subs WHERE username = ?").bind(user.username).run();
+    await logCredits(env, user.username, 0, "到期未续费，文件已下载本机，收回云空间");
+  }
+  return json({ ok: true, remaining, reclaimed: remaining === 0 });
 }
 
 // ========== 文件资源商店 ==========
@@ -2263,6 +2546,14 @@ export default {
     if (url.pathname === "/api/cloud/upload" && request.method === "POST") return handleCloudUpload(request, env);
     if (url.pathname === "/api/cloud/repost" && request.method === "POST") return handleCloudRepost(request, env);
     if (url.pathname === "/api/cloud/renew" && request.method === "POST") return handleCloudRenew(request, env);
+    if (url.pathname === "/api/cloud/reclaim-done" && request.method === "POST") return handleCloudReclaimDone(request, env);
+    // 云空间 7 天试用活动（独立空间）
+    if (url.pathname === "/api/cloud/trial/status" && request.method === "GET") return handleTrialStatus(request, env);
+    if (url.pathname === "/api/cloud/trial/claim" && request.method === "POST") return handleTrialClaim(request, env);
+    if (url.pathname === "/api/cloud/trial/upload" && request.method === "POST") return handleTrialUpload(request, env);
+    if (url.pathname === "/api/cloud/trial/file" && request.method === "GET") return handleTrialFile(request, env);
+    if (url.pathname === "/api/cloud/trial/delete" && request.method === "POST") return handleTrialDelete(request, env);
+    if (url.pathname === "/api/cloud/trial/finish" && request.method === "POST") return handleTrialFinish(request, env);
     // 文件资源商店
     if (url.pathname === "/api/market/list" && request.method === "GET") return handleMarketList(request, env);
     if (url.pathname === "/api/market/upload" && request.method === "POST") return handleMarketUpload(request, env);
