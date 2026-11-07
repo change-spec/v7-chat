@@ -16,7 +16,13 @@
   body {
     background: var(--bg); color: var(--text);
     font-family: "Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace;
-    line-height: 1.7; overflow: hidden;
+    /* 不再硬禁滚动：overflow:auto 就是浏览器原生的「内容超出才开滚」，
+       滚轮 / 触摸 / 触控板全部原生支持，无需区分 PC 与移动端。
+       JS 侧另有实时高度检测动态加 class，处理键盘弹出与地址栏变化。 */
+    line-height: 1.7;
+    overflow-x: auto; overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
     background-image:
       linear-gradient(rgba(0,240,255,.03) 1px, transparent 1px),
       linear-gradient(90deg, rgba(0,240,255,.03) 1px, transparent 1px);
@@ -26,7 +32,7 @@
 
   /* 强刷按钮：固定右下角 */
   .force-refresh {
-    position: fixed; right: 16px; bottom: 16px; z-index: 180;
+    position: fixed; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); z-index: 180;
     width: 44px; height: 44px; border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
     font-size: 22px; line-height: 1; cursor: pointer;
@@ -43,11 +49,22 @@
   #scanB { background: linear-gradient(90deg, transparent, rgba(255,46,151,.68), transparent); box-shadow: 0 0 10px rgba(255,46,151,.22); height: 1.5px; }
 
   /* ===== 应用壳：横向大排版 ===== */
-  .app { display: flex; height: 100vh; width: 100vw; overflow: hidden; }
+  .app {
+    display: flex;
+    /* --vvh 由 JS 用 visualViewport 实时写入（键盘/地址栏变化时最准）；
+       没写入时依次回退到 100dvh / 100vh */
+    height: 100vh; height: 100dvh; height: var(--vvh, 100dvh);
+    width: 100%; max-width: 100%;            /* 不用 100vw：有滚动条时会溢出 */
+    /* 溢出统一交给 body 滚（overflow:auto 原生判断）。
+       注意：overflow-x:auto 配 overflow-y:visible 会被规范强制算成 auto，
+       那样会多出一层滚动容器，所以这里两个轴都保持 visible。 */
+    overflow: visible;
+  }
   .app.hidden { display: none; }
   .auth-screen {
     display: flex; align-items: center; justify-content: center;
-    min-height: 100vh; padding: 20px; overflow-y: auto;
+    min-height: 100vh; min-height: 100dvh; padding: 20px; overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
   .auth-screen.hidden { display: none; }
   .auth-card { width: 100%; max-width: 420px; }
@@ -91,12 +108,17 @@
   .side-foot b { color: #00ff96; font-weight: 400; }
   .btn-admin-toggle { display: none; }
 
-  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: visible; }
   .main > .panel {
     flex: 1; display: flex; flex-direction: column; margin: 0; border-radius: 0;
     border-left: 1px solid var(--line); border-right: 1px solid var(--line);
     min-height: 0;
+    /* 长内容面板自带滚动：内容超出才滚，滚轮与手指滑动都走原生 */
+    overflow-y: auto; overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
   }
+  /* 聊天面板例外：只让 .messages 滚，输入框必须固定在底部不能被卷走 */
+  #chatPanel { overflow: hidden; }
   .main > .panel.hidden { display: none; }
   .panel h3 { font-size: 12.5px; letter-spacing: 2px; color: var(--cyan); font-weight: 500; margin-bottom: 14px; text-shadow: 0 0 8px rgba(0,240,255,.5); }
   .log-grid { display: grid; grid-template-columns: 1fr; gap: 20px; flex: 1; min-height: 0; }
@@ -341,7 +363,7 @@
   .market-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
   .market-form .full { grid-column: 1 / -1; }
   .market-form .field { margin: 0; }
-  .market-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; max-height: 46vh; overflow-y: auto; }
+  .market-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
   .market-item { border: 1px solid var(--line); border-radius: 8px; padding: 11px 13px; background: rgba(255,255,255,.02); }
   .market-item.sold { opacity: .55; border-color: rgba(255,255,255,.08); }
   .market-item .mi-top { display: flex; align-items: center; gap: 10px; }
@@ -367,7 +389,7 @@
   /* ===== 平板 / 手机：右侧控制台变抽屉 ===== */
   @media (max-width: 1023px) {
     .rightbar {
-      position: fixed; top: 0; right: 0; height: 100vh; width: min(92vw, 360px);
+      position: fixed; top: 0; right: 0; height: 100vh; height: 100dvh; width: min(92vw, 360px);
       transform: translateX(100%); transition: transform .25s ease; z-index: 160;
       box-shadow: -20px 0 60px rgba(0,0,0,.6); border-left: 1px solid var(--cyan);
     }
@@ -390,7 +412,8 @@
     .app { flex-direction: column; }
     .sidebar {
       width: auto; flex-direction: row; align-items: center; gap: 10px;
-      padding: 10px 12px; overflow-x: auto; overflow-y: hidden;
+      padding: 10px 12px; overflow-x: auto; overflow-y: visible;
+      -webkit-overflow-scrolling: touch;
       border-right: none; border-bottom: 1px solid var(--line);
     }
     .brand { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
@@ -421,7 +444,7 @@
   .member-pick input { width: auto; flex-shrink: 0; }
   .member-pick .m-name { flex: 1; }
   .member-pick .m-role { color: var(--amber); font-size: 11px; }
-  #boardArea:fullscreen { width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); }
+  #boardArea:fullscreen { width: 100vw; height: 100vh; height: 100dvh; display: flex; align-items: center; justify-content: center; background: var(--bg); }
   .btn-back { color: var(--dim); border-color: rgba(122,122,146,.4); }
   .btn-back:hover { color: var(--cyan); background: rgba(0,240,255,.08); }
   @media (max-width: 767px) {
@@ -447,6 +470,24 @@
   .badge-B { background: rgba(255,46,151,.15); color: var(--magenta); border:1px solid rgba(255,46,151,.4); }
   .badge-C { background: rgba(255,184,0,.15); color: var(--amber); border:1px solid rgba(255,184,0,.4); }
   .rl-sub { color: var(--dim); font-size:12px; margin-left:8px; }
+
+  /* ===== 实时检测标记：内容超出屏幅时明确保证两轴可滚 ===== */
+  html[data-scroll-y="on"] body { overflow-y: auto; }
+  html[data-scroll-x="on"] body { overflow-x: auto; }
+
+  /* ===== 滚动条：细霓虹，不破坏暗色视觉 ===== */
+  body::-webkit-scrollbar, .main > .panel::-webkit-scrollbar,
+  .app::-webkit-scrollbar, .auth-screen::-webkit-scrollbar { width: 8px; height: 8px; }
+  body::-webkit-scrollbar-track, .main > .panel::-webkit-scrollbar-track,
+  .app::-webkit-scrollbar-track, .auth-screen::-webkit-scrollbar-track { background: rgba(0,0,0,.25); }
+  body::-webkit-scrollbar-thumb, .main > .panel::-webkit-scrollbar-thumb,
+  .app::-webkit-scrollbar-thumb, .auth-screen::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, rgba(0,240,255,.5), rgba(255,46,151,.45));
+    border-radius: 6px; border: 1px solid rgba(0,240,255,.2);
+  }
+  body, .main > .panel, .app, .auth-screen {
+    scrollbar-width: thin; scrollbar-color: rgba(0,240,255,.45) rgba(0,0,0,.25);
+  }
 </style>
 </head>
 <body>
@@ -1023,7 +1064,7 @@
       return { el: el, cy: r.top + r.height / 2 };
     });
   }
-  window.addEventListener('scroll', measure, { passive: true });
+  window.addEventListener('scroll', measure, { passive: true, capture: true });
   window.addEventListener('resize', measure);
   measure();
 
@@ -3475,5 +3516,78 @@
   if (token) enterChat();
 })();
 </script>
+
+<script>
+/* ===== 实时滚动仲裁：内容 px > 可视 px 就开滚 =====
+   不判断 UA、不判断端：手机「请求电脑版」会改宽度，按尺寸判断才不会失效。
+   CSS 的 overflow:auto 本身就是浏览器原生的实时判断（滚轮/手指/触控板全支持）；
+   这里做的是：显式状态标记、visualViewport 键盘/地址栏适配、以及最后一道防裁切兜底。 */
+(function () {
+  var doc = document.documentElement, body = document.body;
+  var app = document.querySelector('.app');
+  var vv = window.visualViewport;
+  var lastH = -1, lastW = -1, raf = 0;
+
+  function vh() { return (vv && vv.height) || window.innerHeight; }
+  function vw() { return (vv && vv.width) || window.innerWidth; }
+
+  function sync() {
+    var H = vh(), W = vw();
+    var appH = app ? Math.max(app.scrollHeight, app.offsetHeight || 0) : 0;
+    var appW = app ? Math.max(app.scrollWidth, app.offsetWidth || 0) : 0;
+    var contentH = Math.max(body.scrollHeight, doc.scrollHeight, appH);
+    var contentW = Math.max(body.scrollWidth, doc.scrollWidth, appW);
+    var overY = contentH > H + 2, overX = contentW > W + 2;
+
+    // 显式状态：高度/宽度超出屏幅 → 开滚（供 CSS 与调试读取）
+    doc.dataset.scrollY = overY ? 'on' : 'off';
+    doc.dataset.scrollX = overX ? 'on' : 'off';
+
+    // 只在数值真的变了才写 CSS 变量，避免 ResizeObserver 自激循环
+    if (Math.abs(H - lastH) > 1) { doc.style.setProperty('--vvh', H + 'px'); lastH = H; }
+    if (Math.abs(W - lastW) > 1) { doc.style.setProperty('--vvw', W + 'px'); lastW = W; }
+
+    // 最后一道兜底：任何内容溢出的面板，若被别的规则写死成不可滚，强制补 auto
+    var panels = document.querySelectorAll('.main > .panel');
+    for (var i = 0; i < panels.length; i++) {
+      var p = panels[i];
+      if (p.id === 'chatPanel' || p.classList.contains('hidden')) continue;
+      var cs = getComputedStyle(p);
+      if (p.scrollHeight > p.clientHeight + 2 && cs.overflowY !== 'auto' && cs.overflowY !== 'scroll')
+        p.style.overflowY = 'auto';
+      if (p.scrollWidth > p.clientWidth + 2 && cs.overflowX !== 'auto' && cs.overflowX !== 'scroll')
+        p.style.overflowX = 'auto';
+    }
+
+    window.__uiScroll = {
+      viewportH: H, viewportW: W, contentH: contentH, contentW: contentW,
+      scrollY: overY, scrollX: overX,
+      clippedY: Math.max(0, contentH - H), clippedX: Math.max(0, contentW - W)
+    };
+  }
+
+  function schedule() {
+    if (raf) return;
+    raf = requestAnimationFrame(function () { raf = 0; sync(); });
+  }
+
+  sync();
+  if (window.ResizeObserver) {
+    var ro = new ResizeObserver(schedule);
+    ro.observe(body);
+    if (app) ro.observe(app);
+    document.querySelectorAll('.main > .panel').forEach(function (p) { ro.observe(p); });
+  }
+  if (vv) { vv.addEventListener('resize', schedule); vv.addEventListener('scroll', schedule); }
+  window.addEventListener('resize', schedule);
+  window.addEventListener('orientationchange', schedule);
+  window.addEventListener('load', schedule);
+  // 动态内容（商品列表、消息、上传结果）插入后补测一次
+  if (window.MutationObserver) {
+    new MutationObserver(schedule).observe(body, { childList: true, subtree: true });
+  }
+})();
+</script>
+
 </body>
 </html>
