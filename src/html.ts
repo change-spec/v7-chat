@@ -105,6 +105,12 @@ export const html = `<!DOCTYPE html>
   .credits-card .p-value { font-size: 30px; font-weight: 700; color: #fff; line-height: 1.2; text-shadow: 0 0 12px rgba(0,240,255,.8); }
   .credits-card .p-save { font-size: 10px; color: var(--dim); margin-top: 6px; letter-spacing: 1px; }
   .credits-card .p-time { font-size: 10.5px; color: var(--cyan); margin-top: 7px; letter-spacing: .5px; font-variant-numeric: tabular-nums; opacity: .85; }
+  .invite-json { font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; line-height: 1.8; padding: 10px 12px; margin: 8px 0; border: 1px solid rgba(0,240,255,.35); border-radius: 8px; background: rgba(0,0,0,.35); color: var(--cyan); white-space: pre-wrap; word-break: break-all; }
+  .invite-row { display: flex; align-items: center; gap: 8px; font-size: 11px; padding: 6px 0; border-top: 1px dashed var(--line); }
+  .invite-row .ir-code { font-family: Consolas, monospace; color: var(--dim); }
+  .invite-row .ir-main { flex: 1; }
+  .invite-row .ir-state { color: var(--amber); }
+  .invite-list { margin-top: 12px; max-height: 220px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
   .credits-card .p-date { font-size: 9.5px; color: var(--dim); margin-top: 2px; }
   /* 云空间试用活动区 */
   .trial-zone { margin-top: 16px; padding: 14px 15px; border: 1px solid rgba(0,240,255,.35); border-radius: 10px; background: rgba(0,240,255,.035); }
@@ -516,18 +522,54 @@ export const html = `<!DOCTYPE html>
       <button class="btn" id="tabLogin">登录</button>
       <button class="btn magenta" id="tabRegister">注册</button>
     </div>
-    <div class="field">
-      <label>用户名（2-16 位字母数字）</label>
-      <input id="authUser" maxlength="16" placeholder="用户名" autocomplete="username">
+
+    <!-- 登录：用户名 + 密码 -->
+    <div id="loginView">
+      <div class="field">
+        <label>用户名（2-16 位字母数字）</label>
+        <input id="authUser" maxlength="16" placeholder="用户名" autocomplete="username">
+      </div>
+      <div class="field">
+        <label>密码（至少 6 位）</label>
+        <div class="pw-wrap">
+          <input id="authPass" type="password" maxlength="64" placeholder="••••••" autocomplete="current-password">
+          <button type="button" class="pw-eye" id="eyeAuth" aria-label="显示或隐藏密码"></button>
+        </div>
+      </div>
+      <button class="btn wide" id="authSubmit">▸ 登录</button>
     </div>
-    <div class="field">
-      <label>密码（至少 6 位）</label>
-      <div class="pw-wrap">
-        <input id="authPass" type="password" maxlength="64" placeholder="••••••" autocomplete="current-password">
-        <button type="button" class="pw-eye" id="eyeAuth" aria-label="显示或隐藏密码"></button>
+
+    <!-- 注册：先验证三项凭据，再自设用户名密码 -->
+    <div id="registerView" class="hidden">
+      <div id="regStep1">
+        <div class="field">
+          <label>belongs_to（归属管理员）</label>
+          <input id="regBelongs" placeholder="change-spec / git-k / kenkin / big-energy / teacher-student">
+        </div>
+        <div class="field">
+          <label>identity（observer 或 member）</label>
+          <input id="regIdentity" placeholder="observer 或 member">
+        </div>
+        <div class="field">
+          <label>account_code（32 位）</label>
+          <input id="regCode" maxlength="64" placeholder="粘贴 Root-Admin 发放的 32 位凭据">
+        </div>
+        <button class="btn wide" id="regVerifyBtn">▸ 验证凭据</button>
+      </div>
+      <div id="regStep2" class="hidden">
+        <div class="hint" id="regVerifiedInfo" style="text-align:left;margin:0 0 10px">凭据有效 · 请设置用户名和密码，完成后账户才算创建</div>
+        <div class="field">
+          <label>用户名（2-16 位字母数字）</label>
+          <input id="regUser" maxlength="16" placeholder="给自己起个用户名">
+        </div>
+        <div class="field">
+          <label>密码（至少 6 位）</label>
+          <input id="regPass" type="password" maxlength="64" placeholder="设置密码">
+        </div>
+        <button class="btn wide" id="regFinishBtn">▸ 完成注册</button>
+        <button class="btn wide magenta" id="regBackBtn" style="margin-top:8px">← 返回重新填凭据</button>
       </div>
     </div>
-    <button class="btn wide" id="authSubmit">▸ 登录</button>
     <div class="err" id="authErr"></div>
   </div>
 </div>
@@ -749,6 +791,7 @@ export const html = `<!DOCTYPE html>
         <div class="tz-note" id="trialNote">
           每个账号最多可申请 <b>5MB</b> 云空间，<b>7 天</b>有效。此空间与上方主空间<b>完全分离</b>，单独计费、单独存放。<br>
           活动时间：<b>2026/11/07 16:00 ~ 2026/12/14 16:00</b>（北京时间）。<br>
+          试用空间<b>必须手动申请</b>，不会自动发放；申请时需输入<b>本账号密码</b>确认是本人操作。<br>
           ⚠ <b>试用期结束后收回空间时，如果里面还有文件，系统会先把全部文件下载到本机，确认落盘后才删除服务器副本</b>；未下载成功的文件会保留，不会丢失。
         </div>
         <div class="tz-count" id="trialCount">活动状态检测中…</div>
@@ -823,25 +866,32 @@ export const html = `<!DOCTYPE html>
         <div class="ctrl-col hidden" id="createAccZone">
           <h3>▸ 统一创建账号</h3>
           <div class="field">
-            <label>新用户名（2-16 位字母数字）</label>
-            <input id="newUser" maxlength="16" placeholder="给成员起个名">
-          </div>
-          <div class="field">
-            <label>初始密码（至少 6 位）</label>
-            <div class="pw-wrap">
-              <input id="newPass" type="password" maxlength="64" placeholder="初始密码，发给对方后让他自己改">
-              <button type="button" class="pw-eye" id="eyeNew" aria-label="显示或隐藏密码"></button>
-            </div>
-          </div>
-          <div class="field">
-            <label>身份</label>
-            <select id="newRole">
-              <option value="observer">Observer（只能围观，不能发言）</option>
-              <option value="member" selected>User（普通成员）</option>
-              <option value="admin">Admin（每日工资+兑换码+划转）</option>
+            <label>belongs_to（归属管理员）</label>
+            <select id="inviteBelongs">
+              <option value="change-spec">change-spec</option>
+              <option value="git-k">git-k</option>
+              <option value="kenkin">kenkin</option>
+              <option value="big-energy">big-energy</option>
+              <option value="teacher-student">teacher-student</option>
             </select>
           </div>
-          <button class="btn wide" id="btnCreateAcc">▸ 创建账号</button>
+          <div class="field">
+            <label>identity（身份）</label>
+            <select id="inviteIdentity">
+              <option value="observer">Observer（只能围观，不能发言）</option>
+              <option value="member" selected>User（普通成员）</option>
+            </select>
+          </div>
+          <button class="btn wide" id="btnCreateAcc">▸ 创建</button>
+          <div class="hint" style="text-align:left;margin:8px 0 0">创建只发放凭据；对方在注册页验证后自设用户名和密码，账户才算真正创建完成。管理员账号不可再创建。</div>
+
+          <div id="inviteReveal" class="hidden" style="margin-top:12px">
+            <div class="hint" style="text-align:left;color:var(--amber)">请现在记下以下信息（只完整显示这一次）：</div>
+            <pre class="invite-json" id="inviteJson"></pre>
+            <button class="btn wide magenta" id="btnInviteSeen">▸ 我记完了</button>
+          </div>
+
+          <div class="invite-list" id="inviteList"></div>
           <div class="err" id="adminErr"></div>
         </div>
         <div class="ctrl-col hidden" id="otpZone">
@@ -1201,11 +1251,70 @@ export const html = `<!DOCTYPE html>
 
   function setMode(next) {
     mode = next;
-    authSubmit.textContent = next === 'login' ? '▸ 登录' : '▸ 注册';
+    var isLogin = next === 'login';
+    document.getElementById('loginView').classList.toggle('hidden', !isLogin);
+    document.getElementById('registerView').classList.toggle('hidden', isLogin);
     authErr.textContent = '';
+    // 切回登录时清掉注册态，避免残留凭据
+    if (isLogin) {
+      regVerified = null;
+      document.getElementById('regStep1').classList.remove('hidden');
+      document.getElementById('regStep2').classList.add('hidden');
+    }
   }
   tabLogin.addEventListener('click', function () { setMode('login'); });
   tabRegister.addEventListener('click', function () { setMode('register'); });
+  // ===== 注册：先验证三项凭据，再自设用户名/密码，账户此时才真正创建 =====
+  var regVerifyBtn = document.getElementById('regVerifyBtn');
+  var regFinishBtn = document.getElementById('regFinishBtn');
+  regVerifyBtn.addEventListener('click', async function () {
+    authErr.textContent = '';
+    var b = {
+      belongs_to: document.getElementById('regBelongs').value.trim(),
+      identity: document.getElementById('regIdentity').value.trim(),
+      account_code: document.getElementById('regCode').value.trim()
+    };
+    if (!b.belongs_to || !b.identity || !b.account_code) { authErr.textContent = '三项都要填'; return; }
+    regVerifyBtn.disabled = true;
+    try {
+      var r = await api('/api/register/verify', b);
+      if (!r.ok) { authErr.textContent = r.data.error || ('验证失败（' + r.status + '）'); regVerifyBtn.disabled = false; return; }
+      regVerified = b;
+      document.getElementById('regVerifiedInfo').textContent =
+        '凭据有效 · 归属 ' + r.data.belongsTo + ' / 身份 ' + r.data.identity + ' · 请设置用户名和密码，完成后账户才算创建';
+      document.getElementById('regStep1').classList.add('hidden');
+      document.getElementById('regStep2').classList.remove('hidden');
+    } catch (e) { authErr.textContent = '网络错误，重试'; }
+    regVerifyBtn.disabled = false;
+  });
+  document.getElementById('regBackBtn').addEventListener('click', function () {
+    regVerified = null;
+    document.getElementById('regStep2').classList.add('hidden');
+    document.getElementById('regStep1').classList.remove('hidden');
+    authErr.textContent = '';
+  });
+  regFinishBtn.addEventListener('click', async function () {
+    if (!regVerified) { authErr.textContent = '请先验证凭据'; return; }
+    var u = document.getElementById('regUser').value.trim();
+    var p = document.getElementById('regPass').value;
+    if (!u || !p) { authErr.textContent = '用户名和密码都要填'; return; }
+    authErr.textContent = '';
+    regFinishBtn.disabled = true;
+    try {
+      var r = await api('/api/register', {
+        belongs_to: regVerified.belongs_to,
+        identity: regVerified.identity,
+        account_code: regVerified.account_code,
+        username: u, password: p
+      });
+      if (!r.ok) { authErr.textContent = r.data.error || ('注册失败（' + r.status + '）'); regFinishBtn.disabled = false; return; }
+      token = r.data.token;
+      localStorage.setItem(TOKEN_KEY, token);
+      await enterChat();
+    } catch (e) { authErr.textContent = '网络错误，重试'; }
+    regFinishBtn.disabled = false;
+  });
+
 
   function fmtTime(iso) {
     if (!iso) return '----.--.-- --:--';
@@ -1278,6 +1387,8 @@ export const html = `<!DOCTYPE html>
     return { ok: res.ok, status: res.status, data: data };
   }
 
+  var regVerified = null;
+
   async function submitAuth() {
     var username = authUser.value.trim();
     var password = authPass.value;
@@ -1285,7 +1396,7 @@ export const html = `<!DOCTYPE html>
     authErr.textContent = '';
     authSubmit.disabled = true;
     try {
-      var r = await api(mode === 'login' ? '/api/login' : '/api/register', { username: username, password: password });
+      var r = await api('/api/login', { username: username, password: password });
       if (!r.ok) {
         authErr.textContent = r.data.error || ('失败（' + r.status + '）');
         authSubmit.disabled = false;
@@ -2022,13 +2133,18 @@ export const html = `<!DOCTYPE html>
   });
 
   var adminErr = document.getElementById('adminErr');
-  var newUser = document.getElementById('newUser');
-  var newPass = document.getElementById('newPass');
-  var newRole = document.getElementById('newRole');
+  var inviteBelongs = document.getElementById('inviteBelongs');
+  var inviteIdentity = document.getElementById('inviteIdentity');
   var btnCreateAcc = document.getElementById('btnCreateAcc');
+  var inviteReveal = document.getElementById('inviteReveal');
+  var inviteJson = document.getElementById('inviteJson');
+  var btnInviteSeen = document.getElementById('btnInviteSeen');
+  var inviteList = document.getElementById('inviteList');
+  var currentInviteCode = '';
   var accList = document.getElementById('accList');
 
   var ROLE_LABEL = { 'root-admin': 'Root-Admin', 'admin': 'Admin', 'member': 'User', 'observer': 'Observer' };
+  var BUILTIN_USERS = ['deportee', 'change-spec', 'git-k', 'kenkin', 'big-energy', 'teacher-student'];
 
   async function loadAccounts() {
     var r = await api('/api/admin/accounts');
@@ -2049,7 +2165,7 @@ export const html = `<!DOCTYPE html>
       row.appendChild(u);
       row.appendChild(p);
       row.appendChild(ro);
-      if (meRole === 'root-admin' && a.role !== 'root-admin' && a.username !== me) {
+      if (meRole === 'root-admin' && a.role !== 'root-admin' && a.username !== me && BUILTIN_USERS.indexOf(a.username) === -1) {
         var db = document.createElement('button');
         db.className = 'btn small magenta';
         db.textContent = '注销';
@@ -2059,6 +2175,7 @@ export const html = `<!DOCTYPE html>
       }
       accList.appendChild(row);
     });
+    loadInvites();
   }
 
   // ===== 注销成员（弹窗 + RA 密码验证）=====
@@ -2104,31 +2221,61 @@ export const html = `<!DOCTYPE html>
     btn.disabled = false;
   });
 
+  // 凭据列表：服务端只下发脱敏 code，永远不再完整显示
+  async function loadInvites() {
+    if (!inviteList) return;
+    var r = await api('/api/admin/invites');
+    if (!r.ok) return;
+    inviteList.innerHTML = '';
+    (r.data.invites || []).forEach(function (it) {
+      var row = document.createElement('div'); row.className = 'invite-row';
+      var code = document.createElement('span'); code.className = 'ir-code'; code.textContent = it.codeMask;
+      var main = document.createElement('span'); main.className = 'ir-main';
+      main.textContent = it.belongsTo + ' / ' + it.identity;
+      var state = document.createElement('span'); state.className = 'ir-state';
+      state.textContent = it.used ? ('已激活' + (it.usedBy ? '：' + it.usedBy : '')) : (it.revealed ? '待激活' : '待记下');
+      row.appendChild(code); row.appendChild(main); row.appendChild(state);
+      inviteList.appendChild(row);
+    });
+  }
+
   async function createAccount() {
-    var username = newUser.value.trim();
-    var password = newPass.value;
     adminErr.style.color = '';
     adminErr.textContent = '';
-    if (!username || !password) { adminErr.textContent = '用户名和密码都要填'; return; }
     btnCreateAcc.disabled = true;
     try {
-      var r = await api('/api/admin/create-account', { username: username, password: password, role: newRole.value });
-      if (!r.ok) {
-        adminErr.textContent = r.data.error || ('失败（' + r.status + '）');
-        btnCreateAcc.disabled = false;
-        return;
-      }
-      newUser.value = '';
-      newPass.value = '';
+      var r = await api('/api/admin/create-invite', {
+        belongs_to: inviteBelongs.value, identity: inviteIdentity.value
+      });
+      if (!r.ok) { adminErr.textContent = r.data.error || ('失败（' + r.status + '）'); return; }
+      currentInviteCode = r.data.account_code;
+      // 完整信息只显示这一次，格式与注册页三项一致
+      inviteJson.textContent = JSON.stringify({
+        belongs_to: r.data.belongs_to,
+        identity: r.data.identity,
+        account_code: r.data.account_code
+      }, null, 2);
+      inviteReveal.classList.remove('hidden');
       adminErr.style.color = '#00ff96';
-      adminErr.textContent = '账号 ' + username + ' 创建成功，把账号密码私发给对方';
-      loadAccounts();
-    } catch (e) {
-      adminErr.textContent = '网络错误，重试';
-    }
-    btnCreateAcc.disabled = false;
+      adminErr.textContent = '凭据已生成（账户尚未创建），请现在记下并交给对方';
+      loadInvites();
+    } catch (e) { adminErr.textContent = '网络错误，重试'; }
+    finally { btnCreateAcc.disabled = false; }
   }
   btnCreateAcc.addEventListener('click', createAccount);
+
+  btnInviteSeen.addEventListener('click', async function () {
+    if (!currentInviteCode) return;
+    btnInviteSeen.disabled = true;
+    try { await api('/api/admin/invite-seen', { code: currentInviteCode }); } catch (e) {}
+    currentInviteCode = '';
+    inviteJson.textContent = '';
+    inviteReveal.classList.add('hidden');
+    btnInviteSeen.disabled = false;
+    adminErr.style.color = '';
+    adminErr.textContent = '已隐藏：凭据不会再完整显示，账户仍待对方在注册页激活。';
+    loadInvites();
+  });
 
   var EYE_OPEN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.8"/></svg>';
   var EYE_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.8"/><line x1="3.5" y1="3.5" x2="20.5" y2="20.5"/></svg>';
@@ -2144,7 +2291,6 @@ export const html = `<!DOCTYPE html>
     });
   }
   bindEye('eyeAuth', 'authPass');
-  bindEye('eyeNew', 'newPass');
   bindEye('eyeDeact', 'deactPass');
 
   // ===== Credits 兑换面板 =====
@@ -3635,11 +3781,15 @@ export const html = `<!DOCTYPE html>
       body.innerHTML = '<div class="tz-closed">活动已结束，未申请的账号无法再申请。</div>';
       return;
     }
-    // 未申请
+    // 未申请：必须手动申请，并输入本账号密码确认是本人操作
     if (!d.trial) {
-      body.innerHTML = '<button class="btn wide" id="btnTrialClaim">▸ 立即申请 5MB / 7 天试用</button>';
+      body.innerHTML = '<div class="field"><label>手动申请需输入本账号密码，确认是本人操作</label>' +
+        '<input type="password" id="trialPwd" placeholder="本账号密码"></div>' +
+        '<button class="btn wide" id="btnTrialClaim">▸ 手动申请 5MB / 7 天试用</button>';
       document.getElementById('btnTrialClaim').addEventListener('click', async function () {
-        var rr = await api('/api/cloud/trial/claim', {});
+        var pw = document.getElementById('trialPwd').value;
+        if (!pw) { document.getElementById('trialErr').textContent = '请输入本账号密码'; return; }
+        var rr = await api('/api/cloud/trial/claim', { password: pw });
         if (!rr.ok) { document.getElementById('trialErr').textContent = rr.data.error || '申请失败'; return; }
         appendSys('已申请 5MB 云空间 7 天试用');
         loadTrial();

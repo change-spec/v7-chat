@@ -34,3 +34,20 @@ desktop.ini
 .vscode/
 .idea/
 *.swp
+
+# 云文件备份（含 Root-Admin 私人照片/视频），绝不进公开仓库
+cloud_backup_*/
+*.mp4
+*.jpg
+*.jpeg
+*.png
+backup_cloud.log
+md2docx.log
+# 本地 UI 探针
+ui_*_check.html
+ui_probe*.html
+ui_verify*.html
+ui_final.html
+ui_chat.html
+ui_kb.html
+live_snap.html

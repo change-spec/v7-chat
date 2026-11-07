@@ -12,6 +12,23 @@ export interface Env {
 
 const PBKDF2_ITERATIONS = 100000;
 const VALID_ROLES = ["observer", "member", "admin"];
+// ===== 内置账号（时刻保证存在，丢失自动重建）=====
+// 只存 PBKDF2 的固定 salt / pass_hash，不存明文口令（本仓库是 public）。
+// 与 createAccount() 完全同一套算法：PBKDF2-HMAC-SHA256 / 100000 次 / 32 字节 / hex。
+// 「重建一模一样」= 用同一 salt+hash 插回，原密码即可直接登录。
+const BUILTIN_ACCOUNTS = [
+  { username: "deportee", role: "root-admin", salt: "0f20f220483b8059ac94911e00c0e39a", passHash: "05e26260cdb6f42f0f017d3a3e35e261d424eea816a00b9059a5ba74025cb997" },
+  { username: "change-spec", role: "admin", salt: "353eec00386c2b4f11637bd3731e444d", passHash: "9273c57d582ca461b63aad23592aa66cde84412e0d34bf9074fec31a9f31a255" },
+  { username: "git-k", role: "admin", salt: "80d354e353a980327a3ceb1ad1fd3e87", passHash: "449a30fc867c52bca76d36800b29a835302626024b18eb33a448b627dcb3065d" },
+  { username: "kenkin", role: "admin", salt: "31d83ee7ed88a919eae46974fcb87b78", passHash: "387a930b1809e0d3b821455712a381fc124adc832a29ac058d48dda1f7e29a36" },
+  { username: "big-energy", role: "admin", salt: "29ee9511cb83d4a050c19cee73065b42", passHash: "d1aa85344b95c396ae23ff26e0934811bcbc4b857577defdd7b23010b47e75b6" },
+  { username: "teacher-student", role: "admin", salt: "058e48363e05e268ae6748ba01b06a13", passHash: "a2e5ac34d5167addffeb04c2cf3249a115a2210a9a5667bc65a00053ec770dab" }
+];
+// belongs_to 只能从这 5 位管理员里选；新建账号不能再用 admin 身份
+const ADMIN_NAMES = ["change-spec", "git-k", "kenkin", "big-energy", "teacher-student"];
+const BUILTIN_USERNAMES = BUILTIN_ACCOUNTS.map((a) => a.username);
+const INVITE_IDENTITIES = ["observer", "member"];
+
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -377,6 +394,17 @@ async function hasActiveApiKey(env: Env, username: string): Promise<boolean> {
   return !!(k && !k.revoked);
 }
 
+async function verifyAccountPassword(env: Env, username: string, password: string): Promise<boolean> {
+  const row = await env.DB.prepare("SELECT pass_hash, salt FROM accounts WHERE username = ?")
+    .bind(username).first<{ pass_hash: string; salt: string }>();
+  if (!row || !row.salt) return false;
+  const parts = row.salt.match(/.{2}/g);
+  if (!parts) return false;
+  const saltBytes = Uint8Array.from(parts.map((h) => parseInt(h, 16)));
+  const hash = await hashPassword(password, saltBytes.buffer as ArrayBuffer);
+  return hash === row.pass_hash;
+}
+
 async function createAccount(env: Env, username: string, password: string, role: string): Promise<void> {
   const salt = randomSalt();
   const passHash = await hashPassword(password, salt.buffer as ArrayBuffer);
@@ -387,39 +415,138 @@ async function createAccount(env: Env, username: string, password: string, role:
 }
 
 async function handleRegister(request: Request, env: Env): Promise<Response> {
-  let body: { username?: string; password?: string };
-  try {
-    body = await request.json();
-  } catch {
-    return json({ error: "请求格式错误" }, 400);
+  let body: { username?: string; password?: string; belongs_to?: string; identity?: string; account_code?: string };
+  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  await ensureSchema(env);
+  await ensureBuiltinAccounts(env);
+
+  const code = (body.account_code || "").trim();
+  if (code) {
+    // ===== 新流程：凭据验证通过后，用户自设用户名/密码，这才算真正建号 =====
+    const belongsTo = (body.belongs_to || "").trim();
+    const identity = (body.identity || "").trim().toLowerCase();
+    if (!belongsTo || !identity) return json({ error: "缺少 belongs_to / identity" }, 400);
+    const inv = await env.DB.prepare("SELECT * FROM account_invites WHERE code = ?").bind(code).first<any>();
+    if (!inv) return json({ error: "account_code 无效" }, 404);
+    if (inv.used) return json({ error: "该 account_code 已被使用" }, 409);
+    if (inv.belongs_to !== belongsTo) return json({ error: "belongs_to 与该凭据不匹配" }, 403);
+    if (inv.identity !== identity) return json({ error: "identity 与该凭据不匹配" }, 403);
+    if (ADMIN_NAMES.indexOf(inv.belongs_to) === -1) return json({ error: "凭据归属无效" }, 400);
+    if (INVITE_IDENTITIES.indexOf(inv.identity) === -1) return json({ error: "凭据身份无效" }, 400);
+    const username = (body.username || "").trim();
+    const password = body.password || "";
+    const invalid = validateCredentials(username, password);
+    if (invalid) return json({ error: invalid }, 400);
+    const exists = await env.DB.prepare("SELECT username FROM accounts WHERE username = ?").bind(username).first();
+    if (exists) return json({ error: "用户名已被占用" }, 409);
+    // 条件更新先占坑，防止同一凭据并发激活两次
+    const now = new Date().toISOString();
+    const upd = await env.DB.prepare("UPDATE account_invites SET used = 1, used_by = ?, used_at = ? WHERE code = ? AND used = 0")
+      .bind(username, now, code).run();
+    const changed = (upd as any).meta && (upd as any).meta.changes;
+    if (changed === 0) return json({ error: "该 account_code 刚被使用" }, 409);
+    try {
+      await createAccount(env, username, password, inv.identity);
+    } catch (e) {
+      await env.DB.prepare("UPDATE account_invites SET used = 0, used_by = NULL, used_at = NULL WHERE code = ?").bind(code).run();
+      return json({ error: "创建账号失败，请重试" }, 409);
+    }
+    await ensureBuiltins(env, username);
+    const token = await issueSession(env, username);
+    await writeAdminLog(env, inv.belongs_to, "activate_account", username + " 通过凭据注册（" + inv.identity + "，归属 " + inv.belongs_to + "）");
+    return json({ token, username, role: inv.identity, belongsTo: inv.belongs_to });
   }
+
+  // ===== 旧通道：管理员手动建号（保留兼容）=====
   const username = (body.username || "").trim();
   const password = body.password || "";
   const invalid = validateCredentials(username, password);
   if (invalid) return json({ error: invalid }, 400);
-
-  await ensureSchema(env);
   const count = await env.DB.prepare("SELECT COUNT(*) AS n FROM accounts").first<{ n: number }>();
   const isBootstrap = count && count.n === 0;
-
   if (!isBootstrap) {
     const user = await authUser(request, env);
     if (!user || (user.role !== "admin" && user.role !== "root-admin")) {
-      return json({ error: "公开注册已关闭，账号由 Root-Admin 统一创建" }, 403);
+      return json({ error: "公开注册已关闭，请在注册页用 belongs_to / identity / account_code 激活" }, 403);
     }
   }
-
   const exists = await env.DB.prepare("SELECT username FROM accounts WHERE username = ?").bind(username).first();
-  if (exists) {
-    return json({ error: "用户名已被占用" }, 409);
-  }
-
+  if (exists) return json({ error: "用户名已被占用" }, 409);
   const role = isBootstrap ? "root-admin" : "member";
   await createAccount(env, username, password, role);
-  // 注册即与 Root-Admin 建立一条 B 类私聊（dm:<user>），并确保 Geek公告群存在
   await ensureBuiltins(env, username);
   const token = await issueSession(env, username);
   return json({ token, username, role });
+}
+
+// 注册页第一步：只校验三项凭据，不创建账号、不发放任何会话
+async function handleRegisterVerify(request: Request, env: Env): Promise<Response> {
+  let body: { belongs_to?: string; identity?: string; account_code?: string };
+  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  await ensureSchema(env);
+  await ensureBuiltinAccounts(env);
+  const code = (body.account_code || "").trim();
+  const belongsTo = (body.belongs_to || "").trim();
+  const identity = (body.identity || "").trim().toLowerCase();
+  if (!code || !belongsTo || !identity) return json({ error: "belongs_to / identity / account_code 三项都要填" }, 400);
+  const inv = await env.DB.prepare("SELECT * FROM account_invites WHERE code = ?").bind(code).first<any>();
+  if (!inv) return json({ error: "account_code 无效" }, 404);
+  if (inv.used) return json({ error: "该凭据已被使用" }, 409);
+  if (inv.belongs_to !== belongsTo || inv.identity !== identity) {
+    return json({ error: "belongs_to / identity / account_code 三项不匹配" }, 403);
+  }
+  return json({ ok: true, belongsTo: inv.belongs_to, identity: inv.identity });
+}
+
+// RA：发放邀请凭据，只落一条待激活记录，绝不创建账号
+async function handleAdminCreateInvite(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user || user.role !== "root-admin") return json({ error: "仅 Root-Admin 可发放凭据" }, 403);
+  let body: { belongs_to?: string; identity?: string };
+  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  await ensureSchema(env);
+  const belongsTo = (body.belongs_to || "").trim();
+  const identity = (body.identity || "").trim().toLowerCase();
+  if (ADMIN_NAMES.indexOf(belongsTo) === -1) return json({ error: "belongs_to 必须是五位管理员之一" }, 400);
+  if (INVITE_IDENTITIES.indexOf(identity) === -1) return json({ error: "identity 只能是 observer 或 member" }, 400);
+  // 16 字节随机 → 32 位十六进制字符串
+  const code = toHex(crypto.getRandomValues(new Uint8Array(16)).buffer as ArrayBuffer);
+  const now = new Date().toISOString();
+  await env.DB.prepare("INSERT INTO account_invites (code, belongs_to, identity, revealed, used, created_at) VALUES (?, ?, ?, 0, 0, ?)")
+    .bind(code, belongsTo, identity, now).run();
+  await writeAdminLog(env, user.username, "create_invite", "发放凭据：归属 " + belongsTo + "，身份 " + identity);
+  // 完整信息只在这一次响应里返回
+  return json({ ok: true, belongs_to: belongsTo, identity: identity, account_code: code, createdAt: now });
+}
+
+// RA 点「我记完了」：之后任何接口都不再完整显示该凭据
+async function handleAdminInviteSeen(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user || user.role !== "root-admin") return json({ error: "无权操作" }, 403);
+  let body: { code?: string };
+  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  const code = (body.code || "").trim();
+  if (!code) return json({ error: "缺少凭据" }, 400);
+  await ensureSchema(env);
+  await env.DB.prepare("UPDATE account_invites SET revealed = 1 WHERE code = ?").bind(code).run();
+  return json({ ok: true });
+}
+
+// 凭据列表永远脱敏（前 4 后 4），服务端不再下发完整 code
+async function handleAdminInvites(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user || user.role !== "root-admin") return json({ error: "无权查看" }, 403);
+  await ensureSchema(env);
+  const { results } = await env.DB.prepare(
+    "SELECT code, belongs_to, identity, revealed, used, used_by, created_at, used_at FROM account_invites ORDER BY created_at DESC LIMIT 100"
+  ).all<any>();
+  const invites = (results || []).map((r) => ({
+    codeMask: String(r.code).slice(0, 4) + "********" + String(r.code).slice(-4),
+    belongsTo: r.belongs_to, identity: r.identity,
+    revealed: !!r.revealed, used: !!r.used, usedBy: r.used_by,
+    createdAt: r.created_at, usedAt: r.used_at
+  }));
+  return json({ invites: invites });
 }
 
 async function handleAdminCreate(request: Request, env: Env): Promise<Response> {
@@ -441,12 +568,7 @@ async function handleAdminCreate(request: Request, env: Env): Promise<Response> 
   if (!VALID_ROLES.includes(role)) {
     return json({ error: "身份限：Observer/User/Admin" }, 400);
   }
-  if (role === "admin") {
-    const cnt = await env.DB.prepare("SELECT COUNT(*) AS n FROM accounts WHERE role = 'admin'").first<{ n: number }>();
-    if (cnt && cnt.n >= MAX_ADMINS) {
-      return json({ error: "管理员席位已满（" + MAX_ADMINS + "/" + MAX_ADMINS + "）" }, 409);
-    }
-  }
+  if (role === "admin") return json({ error: "管理员账号不可额外创建" }, 403);
   const exists = await env.DB.prepare("SELECT username FROM accounts WHERE username = ?").bind(username).first();
   if (exists) {
     return json({ error: "用户名已被占用" }, 409);
@@ -484,6 +606,7 @@ async function handleDeactivate(request: Request, env: Env): Promise<Response> {
   const row = await env.DB.prepare("SELECT role FROM accounts WHERE username = ?").bind(target).first<{ role: string }>();
   if (!row) return json({ error: "成员 " + target + " 不存在" }, 404);
   if (row.role === "root-admin") return json({ error: "Root-Admin 账号不可注销" }, 403);
+  if (BUILTIN_USERNAMES.indexOf(target) !== -1) return json({ error: "内置账号（Root-Admin 与五位管理员）不可注销" }, 403);
   await ensureBuiltins(env, user.username);
   // 注销时级联删除该成员「与 Root-Admin 的 B 类私聊」（dm:<user>）：房间、成员、消息、禁言、文件一律清空
   const dmRoom = "dm:" + target;
@@ -504,6 +627,42 @@ async function handleDeactivate(request: Request, env: Env): Promise<Response> {
 }
 
 // ===== 基础表自愈：首次请求时若表缺失则自动建表（防止本地 D1 状态被清后 500）=====
+// 时刻保证内置账号存在：60 秒节流 + 一条 COUNT 批量检查，常态每 60 秒最多 1 次读。
+// 只有发现缺失才写（INSERT OR IGNORE，已存在的账号一律不动，绝不覆盖用户改过的密码）。
+let lastBuiltinEnsureAt = 0;
+async function ensureBuiltinAccounts(env: Env): Promise<void> {
+  const nowMs = Date.now();
+  if (nowMs - lastBuiltinEnsureAt < 60 * 1000) return;
+  lastBuiltinEnsureAt = nowMs;
+  try {
+    // 全新库可能连 accounts 表都还没有 —— 先补上，否则下面的 COUNT 抛
+    // "no such table"，被 catch 吞掉后节流又锁 60 秒，自愈会永久失效。
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS accounts (
+      username TEXT PRIMARY KEY,
+      pass_hash TEXT NOT NULL,
+      salt TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'member',
+      points INTEGER NOT NULL DEFAULT 0,
+      last_daily_at TEXT,
+      apikey TEXT,
+      created_at TEXT NOT NULL
+    )`).run();
+    const row = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM accounts WHERE username IN ('deportee','change-spec','git-k','kenkin','big-energy','teacher-student')"
+    ).first<{ n: number }>();
+    if (row && row.n >= BUILTIN_ACCOUNTS.length) return;
+    const now = new Date().toISOString();
+    const stmts = BUILTIN_ACCOUNTS.map((a) =>
+      env.DB.prepare("INSERT OR IGNORE INTO accounts (username, pass_hash, salt, role, points, created_at) VALUES (?, ?, ?, ?, 0, ?)")
+        .bind(a.username, a.passHash, a.salt, a.role, now)
+    );
+    await env.DB.batch(stmts);
+  } catch (e) {
+    lastBuiltinEnsureAt = 0; // 失败时允许下一次立即重试，别被节流锁死
+    console.error("内置账号自愈失败：", e);
+  }
+}
+
 async function ensureSchema(env: Env): Promise<void> {
   try {
     await env.DB.batch([
@@ -601,6 +760,17 @@ async function ensureSchema(env: Env): Promise<void> {
         seq INTEGER NOT NULL,
         data TEXT NOT NULL,
         PRIMARY KEY (file_id, seq)
+      )`),
+      // 账号邀请凭据：RA 只发放凭据，注册页验证后由用户自设用户名密码才算真正建号
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS account_invites (
+        code TEXT PRIMARY KEY,
+        belongs_to TEXT NOT NULL,
+        identity TEXT NOT NULL,
+        revealed INTEGER NOT NULL DEFAULT 0,
+        used INTEGER NOT NULL DEFAULT 0,
+        used_by TEXT,
+        created_at TEXT NOT NULL,
+        used_at TEXT
       )`),
       env.DB.prepare(`CREATE TABLE IF NOT EXISTS admin_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -720,6 +890,7 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   const username = (body.username || "").trim();
   const password = body.password || "";
   await ensureSchema(env);
+  await ensureBuiltinAccounts(env);
   const row = await env.DB.prepare("SELECT pass_hash, salt, role FROM accounts WHERE username = ?")
     .bind(username).first<{ pass_hash: string; salt: string; role: string }>();
   if (!row) {
@@ -769,6 +940,7 @@ async function handlePasswordChange(request: Request, env: Env): Promise<Respons
 async function handleMe(request: Request, env: Env): Promise<Response> {
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
+  await ensureBuiltinAccounts(env);
   const salary = await ensureDailySalary(env, user);
   // 分级保留期清理：C 类 21 天 / B 类 7 天 / A 类 5 天
   // /api/me 是前端登录后必调的接口，用作主动清理触发点（不活跃房间的过期消息也能被清）
@@ -1343,9 +1515,9 @@ const RA_CLOUD_MB = 2048; // Root-Admin 免费永久云空间：2GB
 const CLOUD_MONTH_MS = 30 * 24 * 3600 * 1000;
 const AUTO_RENEW_WINDOW_MS = 20 * 60 * 1000; // 到期前 20 分钟按原价自动续费
 
-// 按角色的可购买上限（MB）：Admin 100 / member 60 / 观测者 10
+// 按角色的可购买上限（MB）：Admin 125 / member 60 / 观测者 10
 function cloudCapForRole(role: string): number {
-  if (role === "admin") return 100;
+  if (role === "admin") return 125;
   if (role === "observer") return 10;
   return 60;
 }
@@ -1854,6 +2026,12 @@ async function handleTrialClaim(request: Request, env: Env): Promise<Response> {
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
   if (!trialWindowOpen()) return json({ error: "活动未开始或已结束（北京时间 2026/11/07 16:00 ~ 2026/12/14 16:00）" }, 409);
+  // 必须手动申请且输入本账号密码确认是本人操作
+  let claimBody: { password?: string };
+  try { claimBody = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  const pwd = claimBody.password || "";
+  if (!pwd) return json({ error: "请输入本账号密码以确认是本人操作" }, 400);
+  if (!(await verifyAccountPassword(env, user.username, pwd))) return json({ error: "密码错误，申请未生效" }, 401);
   const exists = await env.DB.prepare("SELECT username FROM cloud_trials WHERE username = ?").bind(user.username).first();
   if (exists) return json({ error: "每账号限申请一次 5MB 试用空间" }, 409);
   const now = new Date();
@@ -2489,11 +2667,16 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === "/" && request.method === "GET") {
+      await ensureBuiltinAccounts(env); // 打开网站即兜底一次（内部 60 秒节流，节流命中时零开销）
       return new Response(html, {
         headers: { "content-type": "text/html; charset=utf-8" }
       });
     }
     if (url.pathname === "/api/register" && request.method === "POST") return handleRegister(request, env);
+    if (url.pathname === "/api/register/verify" && request.method === "POST") return handleRegisterVerify(request, env);
+    if (url.pathname === "/api/admin/create-invite" && request.method === "POST") return handleAdminCreateInvite(request, env);
+    if (url.pathname === "/api/admin/invite-seen" && request.method === "POST") return handleAdminInviteSeen(request, env);
+    if (url.pathname === "/api/admin/invites" && request.method === "GET") return handleAdminInvites(request, env);
     if (url.pathname === "/api/login" && request.method === "POST") return handleLogin(request, env);
     if (url.pathname === "/api/password" && request.method === "POST") return handlePasswordChange(request, env);
     if (url.pathname === "/api/me" && request.method === "GET") return handleMe(request, env);
