@@ -2427,32 +2427,53 @@ async function handleMarketUpload(request: Request, env: Env): Promise<Response>
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
   const url = new URL(request.url);
-  const name = (url.searchParams.get("name") || "file").slice(0, 200);
-  const mime = (url.searchParams.get("mime") || "application/octet-stream").slice(0, 200);
   const desc = (url.searchParams.get("desc") || "").slice(0, 500);
   const price = Math.floor(Number(url.searchParams.get("price")));
   if (!isFinite(price) || price < 1 || price > MARKET_MAX_PRICE) {
     return json({ error: "标价限 1-" + MARKET_MAX_PRICE + " Credits" }, 400);
   }
-  // kind：file=普通文件；zip=整个文件夹打包（由卖家浏览器压缩成 ZIP 后上传）
-  const kind = url.searchParams.get("kind") === "zip" ? "zip" : "file";
   // copies：同一文件上架份数，1~500；每份独立成交、独立收一次手续费
   let copies = Math.floor(Number(url.searchParams.get("copies")));
   if (!isFinite(copies) || copies < 1) copies = 1;
   if (copies > 500) copies = 500;
-  let buf: ArrayBuffer;
-  try { buf = await request.arrayBuffer(); } catch { return json({ error: "读取文件失败" }, 400); }
-  const size = buf.byteLength;
-  if (size <= 0) return json({ error: "空文件" }, 400);
-  if (size > MARKET_FILE_CAP) {
-    return json({ error: "文件 " + fmtMB(size) + "MB 超过上限 " + (MARKET_FILE_CAP / (1024 * 1024)) + "MB" }, 413);
+
+  // 两种来源：① 直接上传 body（普通文件或浏览器打包好的 ZIP）；② 从本人云存储转载（cloudId，免去重复上传）
+  const cloudId = (url.searchParams.get("cloudId") || "").trim();
+  let name: string, mime: string, bytes: Uint8Array, kind = "file";
+  if (cloudId) {
+    const cf = await env.DB.prepare("SELECT id, name, size, mime, storage FROM cloud_files WHERE id = ? AND owner = ?")
+      .bind(cloudId, user.username).first<{ id: string; name: string; size: number; mime: string | null; storage: string | null }>();
+    if (!cf) return json({ error: "云文件不存在或不属于你" }, 404);
+    const cbytes = await loadCloudBytes(env, cloudId, cf.storage);
+    if (!cbytes) return json({ error: "云文件数据已丢失" }, 404);
+    if (cbytes.length > MARKET_FILE_CAP) {
+      return json({ error: "云文件 " + fmtMB(cbytes.length) + "MB 超过商品上限 " + (MARKET_FILE_CAP / (1024 * 1024)) + "MB" }, 413);
+    }
+    bytes = cbytes;
+    name = (cf.name || "file").slice(0, 200);
+    mime = (cf.mime || "application/octet-stream").slice(0, 200);
+    // 从云转载一律按普通文件上架（文件夹需先在云里打包或逐个上架）
+    kind = "file";
+  } else {
+    name = (url.searchParams.get("name") || "file").slice(0, 200);
+    mime = (url.searchParams.get("mime") || "application/octet-stream").slice(0, 200);
+    // kind：file=普通文件；zip=整个文件夹打包（由卖家浏览器压缩成 ZIP 后上传）
+    kind = url.searchParams.get("kind") === "zip" ? "zip" : "file";
+    let buf: ArrayBuffer;
+    try { buf = await request.arrayBuffer(); } catch { return json({ error: "读取文件失败" }, 400); }
+    if (buf.byteLength <= 0) return json({ error: "空文件" }, 400);
+    if (buf.byteLength > MARKET_FILE_CAP) {
+      return json({ error: "文件 " + fmtMB(buf.byteLength) + "MB 超过上限 " + (MARKET_FILE_CAP / (1024 * 1024)) + "MB" }, 413);
+    }
+    bytes = new Uint8Array(buf);
   }
+  const size = bytes.length;
   const id = "m" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  const storage = await storeMarketBytes(env, id, new Uint8Array(buf), mime);
+  const storage = await storeMarketBytes(env, id, bytes, mime);
   await env.DB.prepare(
     "INSERT INTO market_items (id, seller, name, size, mime, desc, price, storage, kind, copies_total, copies_sold, sold, buyer, sold_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, NULL, NULL, ?)"
   ).bind(id, user.username, name, size, mime, desc, price, storage, kind, copies, new Date().toISOString()).run();
-  await logCredits(env, user.username, 0, "上架商品 " + name + "（标价 " + price + " Credits · 份数 " + copies + "）");
+  await logCredits(env, user.username, 0, "上架商品 " + name + "（标价 " + price + " Credits · 份数 " + copies + (cloudId ? " · 云转载" : "") + "）");
   return json({ ok: true, id, price, size, kind, copies, balance: await pointsOf(env, user.username) });
 }
 

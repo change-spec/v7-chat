@@ -490,6 +490,8 @@
   .cf-row { display:flex; align-items:center; gap:8px; background:rgba(255,255,255,.03); border:1px solid var(--line); border-radius:10px; padding:8px 10px; flex-wrap:wrap; }
   .cf-name { flex:1; min-width:80px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .cf-size { color: var(--dim); font-size:12px; }
+  .cf-folder { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:10px 0 4px; padding:6px 10px; background:linear-gradient(90deg,rgba(177,75,255,.18),rgba(0,255,150,.12)); border:1px solid rgba(177,75,255,.35); border-radius:10px; }
+  .cf-folder-name { font-weight:600; color:#e9d5ff; font-size:13px; }
   .ck { display:flex; align-items:center; gap:6px; font-size:13px; color: var(--dim); margin:6px 0; }
   .badge { display:inline-block; font-size:10px; font-weight:700; padding:1px 6px; border-radius:6px; margin-left:6px; vertical-align:middle; letter-spacing:.5px; }
   .badge-A { background: rgba(0,240,255,.15); color: var(--cyan); border:1px solid rgba(0,240,255,.4); }
@@ -764,6 +766,13 @@
             <label>或选择整个文件夹（打包为 ZIP 上架）</label>
             <input type="file" id="mktFolder" webkitdirectory multiple>
           </div>
+          <div class="field full">
+            <label>或从云存储转载（选你云里的文件直接上架，免去重复上传）</label>
+            <div class="tool-row" style="justify-content:flex-start;gap:8px;margin:0">
+              <button class="btn small" id="btnMktFromCloud" type="button">☁ 从云存储选择文件</button>
+              <span id="mktCloudChosen" style="color:#8fdcb4;font-size:13px">未选择云文件</span>
+            </div>
+          </div>
           <div class="field">
             <label>标价（Credits / 份）</label>
             <input id="mktPrice" type="number" min="1" max="100000" value="10">
@@ -812,7 +821,19 @@
       </div>
 
       <div class="cloud-section">
+        <div class="field">
+          <label>或上传整个文件夹到云（保留目录结构，免费）</label>
+          <input type="file" id="cloudFolder" webkitdirectory multiple>
+        </div>
+        <button class="btn small" id="btnCloudFolderUpload">▸ 上传文件夹（免费）</button>
+        <div class="err" id="cloudFolderErr"></div>
+      </div>
+
+      <div class="cloud-section">
         <div class="rl-title">▸ 我的云文件</div>
+        <div class="tool-row" id="cloudFilesToolbar" style="justify-content:flex-start;gap:8px;margin:0 0 8px;display:none">
+          <button class="btn small" id="btnCloudZipAll">📦 打包下载全部</button>
+        </div>
         <div id="cloudFiles" class="cloud-files"></div>
       </div>
 
@@ -1222,6 +1243,18 @@
     <button class="btn small magenta" id="btnRepostCancel">取消</button>
   </div>
 </div>
+</div>
+
+<div class="modal hidden" id="mktCloudModal">
+  <div class="modal-box" style="max-width:520px;text-align:left">
+    <div class="modal-title">☁ 从云存储选择文件上架</div>
+    <p class="market-note" style="margin:0 0 10px">选择你云空间里的某个文件，直接上架到文件资源商店（免去重复上传）。文件夹需逐个或打包后上架。</p>
+    <div class="err" id="mktCloudErr"></div>
+    <div class="market-list" id="mktCloudList" style="max-height:320px;overflow:auto"></div>
+    <div class="tool-row" style="justify-content:center;margin-bottom:0">
+      <button class="btn small magenta" id="btnMktCloudClose">取消</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -3544,6 +3577,42 @@
       .catch(function (e) { appendSys('下载失败：' + (e && e.message ? e.message : '未知错误')); });
   }
 
+  // ===== 商店上架：从云存储转载（免重复上传）=====
+  var mktCloudId = null, mktCloudName = '';
+  var mktCloudModal = document.getElementById('mktCloudModal');
+  function openMktCloudPicker() {
+    var list = document.getElementById('mktCloudList');
+    var err = document.getElementById('mktCloudErr');
+    list.innerHTML = '<div class="market-empty">加载中…</div>'; err.textContent = '';
+    mktCloudModal.classList.remove('hidden');
+    api('/api/cloud/list').then(function (r) {
+      if (!r.ok) { list.innerHTML = '<div class="market-empty">加载失败</div>'; return; }
+      var files = (r.data.files || []);
+      if (!files.length) { list.innerHTML = '<div class="market-empty">云空间还是空的，先去云存储存点文件</div>'; return; }
+      list.innerHTML = '';
+      files.forEach(function (f) {
+        var div = document.createElement('div'); div.className = 'market-item';
+        var top = document.createElement('div'); top.className = 'mi-top';
+        var nm = document.createElement('span'); nm.className = 'mi-name'; nm.textContent = f.name;
+        var sz = document.createElement('span'); sz.className = 'mi-price'; sz.innerHTML = fmtSize(f.size);
+        top.appendChild(nm); top.appendChild(sz); div.appendChild(top);
+        var ops = document.createElement('div'); ops.className = 'mi-ops';
+        var pick = document.createElement('button'); pick.className = 'btn small'; pick.textContent = '选这个';
+        pick.addEventListener('click', function () {
+          mktCloudId = f.id; mktCloudName = f.name;
+          document.getElementById('mktCloudChosen').textContent = '已选：' + f.name + '（' + fmtSize(f.size) + '）';
+          document.getElementById('mktFile').value = '';
+          document.getElementById('mktFolder').value = '';
+          mktCloudModal.classList.add('hidden');
+        });
+        ops.appendChild(pick); div.appendChild(ops);
+        list.appendChild(div);
+      });
+    }).catch(function () { list.innerHTML = '<div class="market-empty">加载失败</div>'; });
+  }
+  document.getElementById('btnMktFromCloud').addEventListener('click', openMktCloudPicker);
+  document.getElementById('btnMktCloudClose').addEventListener('click', function () { mktCloudModal.classList.add('hidden'); });
+
   document.getElementById('btnMktUpload').addEventListener('click', async function () {
     var fileEl = document.getElementById('mktFile');
     var folderEl = document.getElementById('mktFolder');
@@ -3560,7 +3629,30 @@
     var btn = this;
     btn.disabled = true;
     try {
-      if (folderFiles.length) {
+      var pb, r, uploadUrl;
+      if (mktCloudId) {
+        // 从云存储转载：无需上传 body，仅带 cloudId 让后端读本人云文件副本
+        uploadUrl = '/api/market/upload?price=' + price + '&desc=' + encodeURIComponent(desc) +
+          '&kind=file&copies=' + copies + '&cloudId=' + encodeURIComponent(mktCloudId);
+        pb = uploadProgressBar('从云存储转载：' + mktCloudName);
+        pb.set(60);
+        try {
+          r = await uploadWithProgress(uploadUrl, new Blob(['']), { Authorization: 'Bearer ' + token }, function (p) { pb.set(p); });
+        } catch (e) {
+          var st0 = e && e.status;
+          pb.fail(st0, (e && e.data && e.data.error) || '转载上架失败');
+          mktUploadErr.textContent = (e && e.data && e.data.error) || ('转载上架失败（HTTP ' + st0 + '）');
+          if (st0 === 500 || st0 === 503) appendSys('云转载上架失败：服务 ' + st0);
+          btn.disabled = false; return;
+        }
+        var doneName = mktCloudName;
+        pb.done('已上架（云转载）：' + doneName);
+        fileEl.value = ''; folderEl.value = ''; document.getElementById('mktDesc').value = '';
+        mktCloudId = null; mktCloudName = ''; document.getElementById('mktCloudChosen').textContent = '未选择云文件';
+        mktUploadErr.textContent = '';
+        appendSys('已上架（云转载）：' + doneName + '（标价 ' + price + ' Credits · 份数 ' + copies + '）');
+        loadMarket(); refreshMe();
+      } else if (folderFiles.length) {
         mktUploadErr.textContent = '正在打包文件夹…';
         var total = folderFiles.reduce(function (s, x) { return s + x.size; }, 0);
         if (total > 20 * 1024 * 1024) {
@@ -3572,6 +3664,24 @@
         var baseName = (folderFiles[0].webkitRelativePath || folderFiles[0].name).split('/')[0];
         name = baseName + '.zip'; mime = 'application/zip'; kind = 'zip';
         mktUploadErr.textContent = '打包完成，上传中…';
+        pb = uploadProgressBar('上架上传：' + name);
+        try {
+          r = await uploadWithProgress('/api/market/upload?name=' + encodeURIComponent(name) +
+            '&mime=' + encodeURIComponent(mime) + '&price=' + price + '&desc=' + encodeURIComponent(desc) +
+            '&kind=' + kind + '&copies=' + copies,
+            blob, { Authorization: 'Bearer ' + token }, function (p) { pb.set(p); });
+        } catch (e) {
+          var st1 = e && e.status;
+          pb.fail(st1, (e && e.data && e.data.error) || '上架失败');
+          mktUploadErr.textContent = (e && e.data && e.data.error) || ('上架失败（HTTP ' + st1 + '）');
+          if (st1 === 500 || st1 === 503) appendSys('上架上传失败：服务 ' + st1);
+          btn.disabled = false; return;
+        }
+        pb.done('已上架：' + name);
+        fileEl.value = ''; folderEl.value = ''; document.getElementById('mktDesc').value = '';
+        mktUploadErr.textContent = '';
+        appendSys('已上架：' + name + '（标价 ' + price + ' Credits · 份数 ' + copies + (kind === 'zip' ? ' · 文件夹包' : '') + '）');
+        loadMarket(); refreshMe();
       } else if (f) {
         if (f.size > 20 * 1024 * 1024) {
           mktUploadErr.textContent = '文件超过 20MB 上限（' + fmtSize(f.size) + '）';
@@ -3579,30 +3689,28 @@
         }
         blob = f; name = f.name; mime = f.type || 'application/octet-stream'; kind = 'file';
         mktUploadErr.textContent = '上传中…';
+        pb = uploadProgressBar('上架上传：' + name);
+        try {
+          r = await uploadWithProgress('/api/market/upload?name=' + encodeURIComponent(name) +
+            '&mime=' + encodeURIComponent(mime) + '&price=' + price + '&desc=' + encodeURIComponent(desc) +
+            '&kind=' + kind + '&copies=' + copies,
+            blob, { Authorization: 'Bearer ' + token }, function (p) { pb.set(p); });
+        } catch (e) {
+          var st2 = e && e.status;
+          pb.fail(st2, (e && e.data && e.data.error) || '上架失败');
+          mktUploadErr.textContent = (e && e.data && e.data.error) || ('上架失败（HTTP ' + st2 + '）');
+          if (st2 === 500 || st2 === 503) appendSys('上架上传失败：服务 ' + st2);
+          btn.disabled = false; return;
+        }
+        pb.done('已上架：' + name);
+        fileEl.value = ''; folderEl.value = ''; document.getElementById('mktDesc').value = '';
+        mktUploadErr.textContent = '';
+        appendSys('已上架：' + name + '（标价 ' + price + ' Credits · 份数 ' + copies + (kind === 'zip' ? ' · 文件夹包' : '') + '）');
+        loadMarket(); refreshMe();
       } else {
-        mktUploadErr.textContent = '请先选择文件或文件夹';
+        mktUploadErr.textContent = '请先选择文件、文件夹，或从云存储转载';
         btn.disabled = false; return;
       }
-      var pb = uploadProgressBar('上架上传：' + name);
-      var r;
-      try {
-        r = await uploadWithProgress('/api/market/upload?name=' + encodeURIComponent(name) +
-          '&mime=' + encodeURIComponent(mime) +
-          '&price=' + price + '&desc=' + encodeURIComponent(desc) +
-          '&kind=' + kind + '&copies=' + copies,
-          blob, { Authorization: 'Bearer ' + token }, function (p) { pb.set(p); });
-      } catch (e) {
-        var st = e && e.status;
-        pb.fail(st, (e && e.data && e.data.error) || '上架失败');
-        mktUploadErr.textContent = (e && e.data && e.data.error) || ('上架失败（HTTP ' + st + '）');
-        if (st === 500 || st === 503) appendSys('上架上传失败：服务 ' + st);
-        btn.disabled = false; return;
-      }
-      pb.done('已上架：' + name);
-      fileEl.value = ''; folderEl.value = ''; document.getElementById('mktDesc').value = '';
-      mktUploadErr.textContent = '';
-      appendSys('已上架：' + name + '（标价 ' + price + ' Credits · 份数 ' + copies + (kind === 'zip' ? ' · 文件夹包' : '') + '）');
-      loadMarket(); refreshMe();
     } catch (e) {
       mktUploadErr.textContent = '上架失败：' + (e && e.message ? e.message : '网络错误');
     }
@@ -3714,14 +3822,51 @@
       reclaimMainSpace(s.reclaimFiles);
     }
   }
+  // 把 {name, data} 列表在浏览器内打包成 ZIP 并下载（免费，不占服务器算力）
+  function zipAndDownload(entries, zipName) {
+    if (!window.fflate) { appendSys('打包引擎未加载，请刷新页面'); return; }
+    var map = {};
+    for (var i = 0; i < entries.length; i++) map[entries[i].name] = entries[i].data;
+    var zipped = window.fflate.zipSync(map, { level: 6 });
+    triggerDownload(new Blob([zipped], { type: 'application/zip' }), zipName);
+  }
+  // 抓取一批云文件字节并打包下载（保留目录结构：文件夹文件的 name 已含相对路径）
+  async function downloadCloudZip(files, zipName) {
+    appendSys('正在打包下载 ' + files.length + ' 个文件…');
+    var entries = [];
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i];
+      try {
+        var resp = await fetch('/api/cloud/file?id=' + encodeURIComponent(f.id), { headers: { Authorization: 'Bearer ' + token } });
+        if (!resp.ok) { appendSys('跳过 ' + f.name + '（HTTP ' + resp.status + '）'); continue; }
+        entries.push({ name: f.name, data: new Uint8Array(await resp.arrayBuffer()) });
+      } catch (e) { appendSys('跳过 ' + f.name); }
+    }
+    if (!entries.length) { appendSys('没有可打包的文件'); return; }
+    zipAndDownload(entries, zipName);
+    appendSys('已打包：' + zipName + '（' + entries.length + ' 个文件）');
+  }
+
   async function loadCloudFiles() {
     var r = await api('/api/cloud/list');
     var box = document.getElementById('cloudFiles');
+    var toolbar = document.getElementById('cloudFilesToolbar');
     if (!r.ok) { box.innerHTML = ''; return; }
     var files = r.data.files || [];
     box.innerHTML = '';
-    if (!files.length) { box.innerHTML = '<div class="empty">云空间还是空的</div>'; return; }
+    if (!files.length) { box.innerHTML = '<div class="empty">云空间还是空的</div>'; toolbar.style.display = 'none'; return; }
+    toolbar.style.display = 'flex';
+
+    // 按顶层文件夹分组（name 含 / 的为文件夹内文件）
+    var groups = {};
+    var roots = [];
     files.forEach(function (f) {
+      var top = (f.name.indexOf('/') > 0) ? f.name.split('/')[0] : '';
+      if (top) { (groups[top] = groups[top] || []).push(f); } else roots.push(f);
+    });
+    var folderNames = Object.keys(groups);
+
+    function fileRow(f) {
       var row = document.createElement('div'); row.className = 'cf-row';
       var nm = document.createElement('span'); nm.className = 'cf-name'; nm.textContent = f.name;
       var sz = document.createElement('span'); sz.className = 'cf-size'; sz.textContent = fmtSize(f.size);
@@ -3737,8 +3882,25 @@
         loadCloud();
       });
       row.appendChild(nm); row.appendChild(sz); row.appendChild(dl); row.appendChild(rp); row.appendChild(del);
-      box.appendChild(row);
+      return row;
+    }
+
+    // 根目录（无文件夹）文件
+    roots.forEach(function (f) { box.appendChild(fileRow(f)); });
+    // 每个文件夹：标题行（含“下载此文件夹”）+ 组内文件
+    folderNames.forEach(function (top) {
+      var grp = groups[top];
+      var header = document.createElement('div'); header.className = 'cf-folder';
+      var t = document.createElement('span'); t.className = 'cf-folder-name'; t.textContent = '📁 ' + top + '（' + grp.length + ' 个文件）';
+      var dz = document.createElement('button'); dz.className = 'btn small'; dz.textContent = '📦 下载此文件夹';
+      dz.addEventListener('click', function () { downloadCloudZip(grp.slice(), top + '.zip'); });
+      header.appendChild(t); header.appendChild(dz);
+      box.appendChild(header);
+      grp.forEach(function (f) { box.appendChild(fileRow(f)); });
     });
+
+    // 打包下载全部
+    document.getElementById('btnCloudZipAll').onclick = function () { downloadCloudZip(files.slice(), '云空间全部文件.zip'); };
   }
   function downloadCloud(id, name, mime) {
     // 后端直接返回原始二进制（不是 JSON），r.blob() 拿到的就是文件本体
@@ -3831,6 +3993,34 @@
       if (!r.ok) { err.textContent = d.error || ('上传失败（' + r.status + '）'); return; }
       inp.value = ''; loadCloud(); appendSys('已上传到云：' + f.name + '（免费）');
     } catch (e) { err.textContent = '网络错误'; }
+  });
+  document.getElementById('btnCloudFolderUpload').addEventListener('click', async function () {
+    var inp = document.getElementById('cloudFolder');
+    var err = document.getElementById('cloudFolderErr'); err.textContent = '';
+    var files = inp.files ? Array.prototype.slice.call(inp.files) : [];
+    if (!files.length) { err.textContent = '请先选择整个文件夹（用文件夹选择器，不是单个文件）'; return; }
+    this.disabled = true;
+    var ok = 0, fail = 0;
+    try {
+      for (var i = 0; i < files.length; i++) {
+        var file = files[i];
+        // webkitRelativePath 形如 “顶层文件夹/子目录/文件”，原样作为云里 name 以保留目录结构
+        var rel = (file.webkitRelativePath && file.webkitRelativePath.indexOf('/') > 0) ? file.webkitRelativePath : file.name;
+        try {
+          await uploadCloudBlob(file, rel, file.type || 'application/octet-stream');
+          ok++;
+        } catch (e) {
+          fail++;
+          var code = e && e.status ? ('（HTTP ' + e.status + '）') : '';
+          appendSys('云文件夹上传跳过：' + rel + code);
+        }
+      }
+      appendSys('文件夹上传完成：成功 ' + ok + ' 个' + (fail ? '，失败 ' + fail + ' 个' : '') + '（均免费）');
+    } finally {
+      this.disabled = false;
+      inp.value = '';
+      loadCloud();
+    }
   });
   document.getElementById('btnCloudUnsubMb').addEventListener('click', async function () {
     var mb = Math.floor(Number(document.getElementById('cloudUnsubMb').value) || 0);
