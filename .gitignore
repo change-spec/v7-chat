@@ -55,3 +55,7 @@ live_snap.html
 # 内置账号口令种子（本地保存，绝不入库）
 *seed-passwords*
 .seed-passwords.json
+
+# 批量转换日志
+redocx_all.log
+*.log
