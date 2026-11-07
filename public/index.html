@@ -537,6 +537,7 @@
         </div>
       </div>
       <button class="btn wide" id="authSubmit">▸ 登录</button>
+      <button class="btn wide magenta" id="btnForgotPwd" style="margin-top:8px">忘记密码？用找回代码重置</button>
     </div>
 
     <!-- 注册：先验证三项凭据，再自设用户名密码 -->
@@ -570,6 +571,29 @@
         <button class="btn wide magenta" id="regBackBtn" style="margin-top:8px">← 返回重新填凭据</button>
       </div>
     </div>
+    <!-- 找回密码（未登录可用）-->
+    <div id="recoverView" class="hidden">
+      <div class="hint" style="text-align:left;margin:0 0 10px">输入 Admin / Root-Admin 派发的找回代码，设置新密码。</div>
+      <div class="field">
+        <label>找回代码</label>
+        <input id="authRecCode" maxlength="64" placeholder="粘贴找回代码">
+      </div>
+      <div class="field">
+        <label>用户名</label>
+        <input id="authRecUser" maxlength="16" placeholder="你的用户名">
+      </div>
+      <div class="field">
+        <label>新密码（至少 6 位）</label>
+        <input id="authRecNew" type="password" maxlength="64" placeholder="新密码">
+      </div>
+      <div class="field">
+        <label>确认新密码</label>
+        <input id="authRecNew2" type="password" maxlength="64" placeholder="再输一遍新密码">
+      </div>
+      <button class="btn wide" id="btnAuthRecover">▸ 重置密码</button>
+      <button class="btn wide magenta" id="btnRecBack" style="margin-top:8px">← 返回登录</button>
+    </div>
+
     <div class="err" id="authErr"></div>
   </div>
 </div>
@@ -588,6 +612,7 @@
       <button class="nav-btn amber" id="btnNavShop">🛒 SHOP</button>
       <button class="nav-btn hidden" id="btnNavCmd">▸ 命令行</button>
       <button class="nav-btn" id="btnNavCloud">☁ 云存储</button>
+      <button class="nav-btn hidden" id="btnNavMembers">▸ 成员信息</button>
       <button class="nav-btn hidden" id="btnNavLogs">▸ 系统日志</button>
       <button class="nav-btn hidden" id="btnNavCtrl">▸ 系统控制面板</button>
       <button class="nav-btn" id="btnNavSettings">▸ 个人设置</button>
@@ -919,7 +944,21 @@
         </div>
       </div>
       <div class="acc-list" id="accList" style="margin-top:20px"></div>
+      <div class="tool-row" style="justify-content:flex-end;margin-top:12px">
+        <button class="btn small magenta" id="btnIssueRecoverCtrl">▸ 派发找回代码</button>
+      </div>
       <div class="tool-row"><button class="btn small magenta" id="btnCtrlBack">▸ 返回聊天</button></div>
+    </div>
+
+    <div class="panel hidden" id="membersPanel">
+      <h2>▸ 成员信息 · My Members</h2>
+      <div class="hint" style="text-align:left;margin:0 0 12px">归属于你的用户（用户名 / Credits / 身份）</div>
+      <div class="acc-list" id="memberList"></div>
+      <div class="tool-row" style="justify-content:flex-end;margin-top:12px">
+        <button class="btn small magenta" id="btnIssueRecoverMembers">▸ 派发找回代码</button>
+      </div>
+      <div class="err" id="memberErr"></div>
+      <div class="tool-row"><button class="btn small" id="btnMembersBack">▸ 返回聊天</button></div>
     </div>
 
     <div class="panel hidden" id="settingsPanel">
@@ -951,6 +990,29 @@
           <button class="btn wide" id="btnChangePass">▸ 保存新密码</button>
           <div class="err" id="setErr"></div>
           <div class="hint" id="setOk"></div>
+
+          <div style="border-top:1px solid var(--line);margin:18px 0 14px"></div>
+          <h3>▸ 找回密码</h3>
+          <div class="hint" style="text-align:left;margin:0 0 10px">需要 Admin 或 Root-Admin 派发的找回代码（35 分钟内有效）。</div>
+          <div class="field">
+            <label>找回代码</label>
+            <input id="setRecCode" maxlength="64" placeholder="粘贴派发的找回代码">
+          </div>
+          <div class="field">
+            <label>用户名</label>
+            <input id="setRecUser" maxlength="16" placeholder="要重置密码的用户名">
+          </div>
+          <div class="field">
+            <label>新密码（至少 6 位）</label>
+            <input id="setRecNew" type="password" maxlength="64" placeholder="新密码">
+          </div>
+          <div class="field">
+            <label>确认新密码</label>
+            <input id="setRecNew2" type="password" maxlength="64" placeholder="再输一遍新密码">
+          </div>
+          <button class="btn wide" id="btnSetRecover">▸ 用找回代码重置密码</button>
+          <div class="err" id="setRecErr"></div>
+          <div class="hint" id="setRecOk"></div>
         </div>
         <div class="ctrl-col" id="apiKeyZone">
           <h3>▸ API Key</h3>
@@ -1027,6 +1089,31 @@
     <div class="tool-row" style="justify-content:center;margin-bottom:0">
       <button class="btn magenta" id="btnDeactConfirm">▸ 确认注销</button>
       <button class="btn small" id="btnDeactCancel">取消</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="recoverModal">
+  <div class="modal-box" style="text-align:left;max-width:480px">
+    <div class="modal-title">🔑 派发找回代码</div>
+    <p style="text-align:left">代码有效期固定 <b>35 分钟</b>，只显示这一次；对方使用后仅在系统日志留痕。</p>
+    <div class="field">
+      <label>需要者的用户名</label>
+      <input id="recoverTarget" maxlength="16" placeholder="要找回密码的用户">
+    </div>
+    <div class="field" id="recoverPwdField">
+      <label>管理员密码（你自己的账户密码）</label>
+      <input id="recoverAdminPass" type="password" maxlength="64" placeholder="Admin 派发需验证本人">
+    </div>
+    <div id="recoverOut" class="otp-out hidden">
+      <div class="hint" style="text-align:left;margin:0 0 6px">请立刻复制交给本人，关闭后不再显示：</div>
+      <div class="otp-code" id="recoverCode"></div>
+      <div class="hint" id="recoverExpire" style="text-align:center"></div>
+    </div>
+    <div class="err" id="recoverErr"></div>
+    <div class="tool-row" style="justify-content:center;margin-bottom:0">
+      <button class="btn" id="btnRecoverIssue">▸ 派发</button>
+      <button class="btn small" id="btnRecoverClose">关闭</button>
     </div>
   </div>
 </div>
@@ -1193,6 +1280,7 @@
   var ctrlPanel = document.getElementById('ctrlPanel');
   var settingsPanel = document.getElementById('settingsPanel');
   var cloudPanel = document.getElementById('cloudPanel');
+  var membersPanel = document.getElementById('membersPanel');
   var repostModal = document.getElementById('repostModal');
 
   var mode = 'login';
@@ -1252,6 +1340,7 @@
   function setMode(next) {
     mode = next;
     var isLogin = next === 'login';
+    document.getElementById('recoverView').classList.add('hidden');
     document.getElementById('loginView').classList.toggle('hidden', !isLogin);
     document.getElementById('registerView').classList.toggle('hidden', isLogin);
     authErr.textContent = '';
@@ -1570,6 +1659,8 @@
       document.getElementById('btnCmdEntry').classList.add('hidden');
       document.getElementById('apiKeyAdminZone').classList.add('hidden');
     }
+    // 成员信息页仅 Admin 可见，Root-Admin 不需要
+    document.getElementById('btnNavMembers').classList.toggle('hidden', meRole !== 'admin');
     if (meRole === 'observer') {
       document.getElementById('btnNewGroup').style.display = 'none';
     } else {
@@ -1678,7 +1769,7 @@
   var pendingInvite = null;
   var redeemPanel = document.getElementById('redeemPanel');
   var shopPanel = document.getElementById('shopPanel');
-  var PANELS = [chatPanel, cmdPanel, redeemPanel, logPanel, ctrlPanel, settingsPanel, gameLobby, gamePayPanel, gameRoomPanel, shopPanel, cloudPanel];
+  var PANELS = [chatPanel, cmdPanel, redeemPanel, logPanel, ctrlPanel, settingsPanel, gameLobby, gamePayPanel, gameRoomPanel, shopPanel, cloudPanel, membersPanel];
   function showOnly(el) {
     PANELS.forEach(function (p) { if (p) p.classList.toggle('hidden', p !== el); });
     inCmdPage = (el === cmdPanel);
@@ -2126,6 +2217,8 @@
     deactModal.classList.add('hidden');
     document.getElementById('btnNavLogs').classList.add('hidden');
     document.getElementById('btnNavCtrl').classList.add('hidden');
+    document.getElementById('btnNavMembers').classList.add('hidden');
+    document.getElementById('recoverView').classList.add('hidden');
     authPanel.classList.remove('hidden');
     appShell.classList.add('hidden');
     authScreen.classList.remove('hidden');
@@ -3865,6 +3958,114 @@
     trialReclaiming = false;
     loadTrial();
   }
+
+    // ===== 成员信息页（仅 Admin）=====
+  async function loadMembers() {
+    var list = document.getElementById('memberList');
+    var err = document.getElementById('memberErr');
+    if (!list) return;
+    var r = await api('/api/admin/members');
+    list.innerHTML = '';
+    if (!r.ok) { err.textContent = r.data.error || '加载失败'; return; }
+    (r.data.members || []).forEach(function (m) {
+      var row = document.createElement('div'); row.className = 'acc-row';
+      var u = document.createElement('span'); u.className = 'u'; u.textContent = m.username;
+      var p = document.createElement('span'); p.className = 'p'; p.textContent = 'Credits ' + m.points;
+      var ro = document.createElement('span'); ro.className = 'r'; ro.textContent = ROLE_LABEL[m.role] || m.role;
+      row.appendChild(u); row.appendChild(p); row.appendChild(ro);
+      list.appendChild(row);
+    });
+    if (!(r.data.members || []).length) {
+      var empty = document.createElement('div'); empty.className = 'hint';
+      empty.style.textAlign = 'left'; empty.textContent = '目前还没有归属于你的用户。';
+      list.appendChild(empty);
+    }
+  }
+  function showMembersPanel() { showOnly(membersPanel); loadMembers(); }
+  document.getElementById('btnNavMembers').addEventListener('click', showMembersPanel);
+  document.getElementById('btnMembersBack').addEventListener('click', function () { showOnly(chatPanel); });
+
+  // ===== 派发找回代码弹窗（Admin / Root-Admin 两个入口共用）=====
+  var recoverModal = document.getElementById('recoverModal');
+  function openRecoverModal() {
+    document.getElementById('recoverOut').classList.add('hidden');
+    document.getElementById('recoverCode').textContent = '';
+    document.getElementById('recoverExpire').textContent = '';
+    document.getElementById('recoverErr').textContent = '';
+    document.getElementById('recoverTarget').value = '';
+    document.getElementById('recoverAdminPass').value = '';
+    // Admin 需填自己的账户密码；Root-Admin 不需要
+    document.getElementById('recoverPwdField').classList.toggle('hidden', meRole !== 'admin');
+    document.getElementById('btnRecoverIssue').disabled = false;
+    recoverModal.classList.remove('hidden');
+  }
+  document.getElementById('btnIssueRecoverMembers').addEventListener('click', openRecoverModal);
+  document.getElementById('btnIssueRecoverCtrl').addEventListener('click', openRecoverModal);
+  document.getElementById('btnRecoverClose').addEventListener('click', function () {
+    recoverModal.classList.add('hidden');
+    document.getElementById('recoverCode').textContent = '';  // 关闭即不再显示
+  });
+  document.getElementById('btnRecoverIssue').addEventListener('click', async function () {
+    var err = document.getElementById('recoverErr');
+    var target = document.getElementById('recoverTarget').value.trim();
+    var pwd = document.getElementById('recoverAdminPass').value;
+    err.textContent = '';
+    if (!target) { err.textContent = '请填写需要者的用户名'; return; }
+    var btn = document.getElementById('btnRecoverIssue');
+    btn.disabled = true;
+    try {
+      var r = await api('/api/recover/issue', { username: target, password: pwd });
+      if (!r.ok) { err.textContent = r.data.error || ('派发失败（' + r.status + '）'); btn.disabled = false; return; }
+      document.getElementById('recoverCode').textContent = r.data.code;
+      document.getElementById('recoverExpire').textContent = '有效期至 ' + r.data.expiresAt + '（固定 35 分钟）';
+      document.getElementById('recoverOut').classList.remove('hidden');
+      appendSys('已为 ' + target + ' 派发找回代码（只显示这一次）');
+    } catch (e) { err.textContent = '网络错误，重试'; btn.disabled = false; }
+  });
+
+  // ===== 找回密码组件（个人设置 + 登录页，共用同一接口）=====
+  async function submitRecover(code, username, np, cp) {
+    return await api('/api/recover/reset', {
+      code: code, username: username, newPassword: np, confirmPassword: cp
+    });
+  }
+  document.getElementById('btnSetRecover').addEventListener('click', async function () {
+    var err = document.getElementById('setRecErr'), okEl = document.getElementById('setRecOk');
+    err.textContent = ''; okEl.textContent = '';
+    var r = await submitRecover(
+      document.getElementById('setRecCode').value.trim(),
+      document.getElementById('setRecUser').value.trim(),
+      document.getElementById('setRecNew').value,
+      document.getElementById('setRecNew2').value
+    );
+    if (!r.ok) { err.textContent = r.data.error || ('重置失败（' + r.status + '）'); return; }
+    okEl.textContent = '密码已重置成功，请用新密码登录。';
+    ['setRecCode', 'setRecUser', 'setRecNew', 'setRecNew2'].forEach(function (id) { document.getElementById(id).value = ''; });
+  });
+
+  // 登录页：忘记密码 → 第三视图（未登录也能重置）
+  document.getElementById('btnForgotPwd').addEventListener('click', function () {
+    document.getElementById('loginView').classList.add('hidden');
+    document.getElementById('registerView').classList.add('hidden');
+    document.getElementById('recoverView').classList.remove('hidden');
+    authErr.textContent = '';
+  });
+  document.getElementById('btnRecBack').addEventListener('click', function () { setMode('login'); });
+  document.getElementById('btnAuthRecover').addEventListener('click', async function () {
+    authErr.style.color = '';
+    authErr.textContent = '';
+    var r = await submitRecover(
+      document.getElementById('authRecCode').value.trim(),
+      document.getElementById('authRecUser').value.trim(),
+      document.getElementById('authRecNew').value,
+      document.getElementById('authRecNew2').value
+    );
+    if (!r.ok) { authErr.textContent = r.data.error || ('重置失败（' + r.status + '）'); return; }
+    ['authRecCode', 'authRecUser', 'authRecNew', 'authRecNew2'].forEach(function (id) { document.getElementById(id).value = ''; });
+    setMode('login');
+    authErr.style.color = '#00ff96';
+    authErr.textContent = '密码已重置成功，请用新密码登录。';
+  });
 
     if (token) enterChat();
 })();

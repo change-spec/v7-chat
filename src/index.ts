@@ -28,6 +28,18 @@ const BUILTIN_ACCOUNTS = [
 const ADMIN_NAMES = ["change-spec", "git-k", "kenkin", "big-energy", "teacher-student"];
 const BUILTIN_USERNAMES = BUILTIN_ACCOUNTS.map((a) => a.username);
 const INVITE_IDENTITIES = ["observer", "member"];
+// ===== 内置 C 类群（系统自动维护，不可解散）=====
+const COUNCIL_ROOM = "admin-council";                 // 管理员交流群，RA 群主
+const ADMIN_GROUP_PREFIX = "group:";                   // group:<admin> = xxx的小群
+const RECOVER_TTL_MS = 35 * 60 * 1000;               // 找回代码固定 35 分钟
+const LOG_RETENTION_MS = 35 * 24 * 3600 * 1000;      // 系统日志保留 35 天
+function isBuiltinRoom(id: string): boolean {
+  if (id === "geek" || id === COUNCIL_ROOM) return true;
+  if (id.indexOf(ADMIN_GROUP_PREFIX) === 0 &&
+      ADMIN_NAMES.indexOf(id.slice(ADMIN_GROUP_PREFIX.length)) !== -1) return true;
+  return false;
+}
+
 
 
 function json(data: unknown, status = 200): Response {
@@ -213,8 +225,47 @@ async function purgeOldMessages(env: Env, force = false): Promise<void> {
     await env.DB.prepare(
       "DELETE FROM chat_file_chunks WHERE file_id NOT IN (SELECT id FROM chat_files)"
     ).run();
+    // 系统日志最多保留 35 天
+    await env.DB.prepare("DELETE FROM admin_logs WHERE created_at < ?")
+      .bind(new Date(now - LOG_RETENTION_MS).toISOString()).run();
+    // 过期找回代码：用完或过期即删除，仅在日志留痕
+    await env.DB.prepare("DELETE FROM recover_codes WHERE expires_at < ?").bind(nowIso).run();
   } catch {}
   void nowIso;
+}
+
+// 内置 C 类群自愈：管理员交流群（RA 群主，含所有管理员）+ 每位管理员的小群
+// （该管理员群主，含所有 belongs_to = 该管理员的用户）。60 秒节流，注册时 force。
+let lastRoomsEnsureAt = 0;
+async function ensureBuiltinRooms(env: Env, force = false): Promise<void> {
+  const nowMs = Date.now();
+  if (!force && nowMs - lastRoomsEnsureAt < 60 * 1000) return;
+  lastRoomsEnsureAt = nowMs;
+  try {
+    await ensureRoomSchema(env);
+    try { await env.DB.prepare("ALTER TABLE accounts ADD COLUMN belongs_to TEXT").run(); } catch {}
+    const now = new Date().toISOString();
+    const stmts: any[] = [
+      env.DB.prepare("INSERT OR IGNORE INTO rooms (id,name,type,creator,created_at,class) VALUES (?,?,'builtin',?,?,'C')")
+        .bind(COUNCIL_ROOM, "管理员交流群", "deportee", now),
+      env.DB.prepare("UPDATE rooms SET name='管理员交流群', creator='deportee', class='C' WHERE id=?").bind(COUNCIL_ROOM),
+      env.DB.prepare("INSERT OR IGNORE INTO memberships (room,username,joined_at) SELECT ?, username, ? FROM accounts WHERE role IN ('root-admin','admin')")
+        .bind(COUNCIL_ROOM, now)
+    ];
+    for (const a of ADMIN_NAMES) {
+      const id = ADMIN_GROUP_PREFIX + a;
+      stmts.push(env.DB.prepare("INSERT OR IGNORE INTO rooms (id,name,type,creator,created_at,class) VALUES (?,?,'builtin',?,?,'C')")
+        .bind(id, a + "的小群", a, now));
+      stmts.push(env.DB.prepare("UPDATE rooms SET name=?, creator=?, class='C' WHERE id=?").bind(a + "的小群", a, id));
+      stmts.push(env.DB.prepare("INSERT OR IGNORE INTO memberships (room,username,joined_at) VALUES (?,?,?)").bind(id, a, now));
+      stmts.push(env.DB.prepare("INSERT OR IGNORE INTO memberships (room,username,joined_at) SELECT ?, username, ? FROM accounts WHERE belongs_to = ?")
+        .bind(id, now, a));
+    }
+    await env.DB.batch(stmts);
+  } catch (e) {
+    lastRoomsEnsureAt = 0;
+    console.error("内置群自愈失败：", e);
+  }
 }
 
 // 确保每个账号都拥有 Geek公告群 内置会话
@@ -287,6 +338,7 @@ async function listRoomsFor(env: Env, username: string): Promise<{ id: string; n
 async function handleRoomsList(request: Request, env: Env): Promise<Response> {
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
+  await ensureBuiltinRooms(env);
   await ensureBuiltins(env, user.username);
   const rooms = await listRoomsFor(env, user.username);
   return json({ rooms });
@@ -447,10 +499,14 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
     if (changed === 0) return json({ error: "该 account_code 刚被使用" }, 409);
     try {
       await createAccount(env, username, password, inv.identity);
+      await env.DB.prepare("UPDATE accounts SET belongs_to = ? WHERE username = ?").bind(inv.belongs_to, username).run();
     } catch (e) {
       await env.DB.prepare("UPDATE account_invites SET used = 0, used_by = NULL, used_at = NULL WHERE code = ?").bind(code).run();
       return json({ error: "创建账号失败，请重试" }, 409);
     }
+    // 凭据使用后删除记录，仅在日志留痕
+    await env.DB.prepare("DELETE FROM account_invites WHERE code = ?").bind(code).run();
+    await ensureBuiltinRooms(env, true);   // 新用户自动加入归属管理员的 C 类小群
     await ensureBuiltins(env, username);
     const token = await issueSession(env, username);
     await writeAdminLog(env, inv.belongs_to, "activate_account", username + " 通过凭据注册（" + inv.identity + "，归属 " + inv.belongs_to + "）");
@@ -538,7 +594,7 @@ async function handleAdminInvites(request: Request, env: Env): Promise<Response>
   if (!user || user.role !== "root-admin") return json({ error: "无权查看" }, 403);
   await ensureSchema(env);
   const { results } = await env.DB.prepare(
-    "SELECT code, belongs_to, identity, revealed, used, used_by, created_at, used_at FROM account_invites ORDER BY created_at DESC LIMIT 100"
+    "SELECT code, belongs_to, identity, revealed, used, used_by, created_at, used_at FROM account_invites WHERE used = 0 ORDER BY created_at DESC LIMIT 100"
   ).all<any>();
   const invites = (results || []).map((r) => ({
     codeMask: String(r.code).slice(0, 4) + "********" + String(r.code).slice(-4),
@@ -645,6 +701,7 @@ async function ensureBuiltinAccounts(env: Env): Promise<void> {
       points INTEGER NOT NULL DEFAULT 0,
       last_daily_at TEXT,
       apikey TEXT,
+      belongs_to TEXT,
       created_at TEXT NOT NULL
     )`).run();
     const row = await env.DB.prepare(
@@ -674,6 +731,7 @@ async function ensureSchema(env: Env): Promise<void> {
         points INTEGER NOT NULL DEFAULT 0,
         last_daily_at TEXT,
         apikey TEXT,
+        belongs_to TEXT,
         created_at TEXT NOT NULL
       )`),
       env.DB.prepare(`CREATE TABLE IF NOT EXISTS sessions (
@@ -760,6 +818,14 @@ async function ensureSchema(env: Env): Promise<void> {
         seq INTEGER NOT NULL,
         data TEXT NOT NULL,
         PRIMARY KEY (file_id, seq)
+      )`),
+      // 找回代码：派发后仅显示一次，使用后删除本行，只在 admin_logs 留痕
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS recover_codes (
+        code TEXT PRIMARY KEY,
+        username TEXT NOT NULL,
+        issued_by TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
       )`),
       // 账号邀请凭据：RA 只发放凭据，注册页验证后由用户自设用户名密码才算真正建号
       env.DB.prepare(`CREATE TABLE IF NOT EXISTS account_invites (
@@ -870,6 +936,8 @@ async function ensureSchema(env: Env): Promise<void> {
     try { await env.DB.prepare("ALTER TABLE market_orders ADD COLUMN deliver TEXT").run(); } catch {}
     // cloud_subs.reclaim_pending：到期未续费、等待把文件下载到本机后收回空间
     try { await env.DB.prepare("ALTER TABLE cloud_subs ADD COLUMN reclaim_pending INTEGER NOT NULL DEFAULT 0").run(); } catch {}
+    // accounts.belongs_to：新用户归属的管理员（用于管理员小群与「成员信息」页）
+    try { await env.DB.prepare("ALTER TABLE accounts ADD COLUMN belongs_to TEXT").run(); } catch {}
   } catch {}
 }
 
@@ -941,6 +1009,7 @@ async function handleMe(request: Request, env: Env): Promise<Response> {
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
   await ensureBuiltinAccounts(env);
+  await ensureBuiltinRooms(env);
   const salary = await ensureDailySalary(env, user);
   // 分级保留期清理：C 类 21 天 / B 类 7 天 / A 类 5 天
   // /api/me 是前端登录后必调的接口，用作主动清理触发点（不活跃房间的过期消息也能被清）
@@ -1205,6 +1274,7 @@ async function handleLogs(request: Request, env: Env): Promise<Response> {
   if (user.role !== "admin" && user.role !== "root-admin") {
     return json({ error: "需要管理员权限" }, 403);
   }
+  await purgeOldMessages(env);   // 打开日志页即清理超过 35 天的日志（内部 20 秒节流）
   const { results } = await env.DB.prepare(
     "SELECT admin, action, detail, created_at FROM admin_logs ORDER BY id DESC LIMIT 100"
   ).all<{ admin: string; action: string; detail: string; created_at: string }>();
@@ -1303,6 +1373,7 @@ async function handleRoomTransfer(request: Request, env: Env): Promise<Response>
   try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
   const id = (body.id || "").trim();
   const to = (body.to || "").trim();
+  if (isBuiltinRoom(id)) return json({ error: "内置群聊不可转让" }, 403);
   const room = await getRoomRow(env, id);
   if (!room) return json({ error: "房间不存在" }, 404);
   if (isGeek(room)) return json({ error: "Geek公告群群主是 Root-Admin，管理权不可变更" }, 403);
@@ -1396,6 +1467,7 @@ async function handleRoomDisband(request: Request, env: Env): Promise<Response> 
   const id = (body.id || "").trim();
   const room = await getRoomRow(env, id);
   if (!room) return json({ error: "房间不存在" }, 404);
+  if (isBuiltinRoom(id)) return json({ error: "内置群聊不可解散（管理员交流群 / 管理员小群）" }, 403);
   if (isGeek(room)) return json({ error: "Geek公告群不可解散" }, 403);
   if (room.creator !== user.username) return json({ error: "只有群主可以解散群聊" }, 403);
   await env.DB.batch([
@@ -1931,6 +2003,79 @@ async function handleCloudRenew(request: Request, env: Env): Promise<Response> {
   if (!sub) return json({ error: "你还没有云空间" }, 400);
   await env.DB.prepare("UPDATE cloud_subs SET auto_renew = 1 WHERE username = ?").bind(user.username).run();
   return json({ ok: true, autoRenew: true, ...(await cloudStatus(env, user)) });
+}
+
+// ========== 成员信息（仅 Admin：查看归属于自己的用户）==========
+async function handleAdminMembers(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  if (user.role !== "admin") return json({ error: "仅管理员可查看成员信息" }, 403);
+  await ensureSchema(env);
+  const { results } = await env.DB.prepare(
+    "SELECT username, role, points, created_at FROM accounts WHERE belongs_to = ? ORDER BY created_at"
+  ).bind(user.username).all<{ username: string; role: string; points: number; created_at: string }>();
+  return json({ members: results || [], admin: user.username });
+}
+
+// ========== 找回密码代码 ==========
+// 派发：Admin 需「需要者用户名 + 自己的账户密码」且目标必须归属自己；RA 只需用户名。
+// 代码只在本次响应里完整出现一次，之后任何接口都不再返回；使用后删除记录，仅日志留痕。
+async function handleRecoverIssue(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  if (user.role !== "admin" && user.role !== "root-admin") return json({ error: "仅 Admin / Root-Admin 可派发" }, 403);
+  let body: { username?: string; password?: string };
+  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  const target = (body.username || "").trim();
+  if (!target) return json({ error: "请填写需要者的用户名" }, 400);
+  await ensureSchema(env);
+  const row = await env.DB.prepare("SELECT username, belongs_to FROM accounts WHERE username = ?").bind(target).first<any>();
+  if (!row) return json({ error: "该用户名不存在" }, 404);
+  if (user.role === "admin") {
+    const pwd = body.password || "";
+    if (!pwd) return json({ error: "请输入管理员账户密码" }, 400);
+    if (!(await verifyAccountPassword(env, user.username, pwd))) return json({ error: "管理员密码错误" }, 401);
+    if (row.belongs_to !== user.username) return json({ error: "该用户不归属于你，无法派发" }, 403);
+  }
+  const code = toHex(crypto.getRandomValues(new Uint8Array(16)).buffer as ArrayBuffer);
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + RECOVER_TTL_MS).toISOString();
+  await env.DB.prepare("INSERT INTO recover_codes (code, username, issued_by, expires_at, created_at) VALUES (?,?,?,?,?)")
+    .bind(code, target, user.username, expiresAt, now.toISOString()).run();
+  await writeAdminLog(env, user.username, "recover_issue", "为 " + target + " 派发找回代码（35 分钟有效）");
+  return json({ ok: true, code, username: target, expiresAt });
+}
+
+// 使用：免登录（用户可能已忘记密码），代码 + 用户名 + 新密码 + 确认新密码
+async function handleRecoverReset(request: Request, env: Env): Promise<Response> {
+  let body: { code?: string; username?: string; newPassword?: string; confirmPassword?: string };
+  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  const code = (body.code || "").trim();
+  const username = (body.username || "").trim();
+  const np = body.newPassword || "";
+  const cp = body.confirmPassword || "";
+  if (!code || !username) return json({ error: "找回代码和用户名都要填" }, 400);
+  if (np !== cp) return json({ error: "两次输入的新密码不一致" }, 400);
+  const invalid = validateCredentials(username, np);
+  if (invalid) return json({ error: invalid }, 400);
+  await ensureSchema(env);
+  const row = await env.DB.prepare("SELECT * FROM recover_codes WHERE code = ?").bind(code).first<any>();
+  if (!row) return json({ error: "找回代码无效或已被使用" }, 404);
+  if (row.username !== username) return json({ error: "找回代码与用户名不匹配" }, 403);
+  if (new Date(row.expires_at).getTime() <= Date.now()) {
+    await env.DB.prepare("DELETE FROM recover_codes WHERE code = ?").bind(code).run();
+    return json({ error: "找回代码已过期（固定 35 分钟）" }, 410);
+  }
+  const salt = randomSalt();
+  const newHash = await hashPassword(np, salt.buffer as ArrayBuffer);
+  const upd = await env.DB.prepare("UPDATE accounts SET pass_hash = ?, salt = ? WHERE username = ?")
+    .bind(newHash, toHex(salt.buffer as ArrayBuffer), username).run();
+  const changed = (upd as any).meta && (upd as any).meta.changes;
+  if (changed === 0) return json({ error: "账号不存在" }, 404);
+  // 用后只删除这一条：其余地方不留痕，只在日志留痕（不影响同用户的其它有效代码）
+  await env.DB.prepare("DELETE FROM recover_codes WHERE code = ?").bind(code).run();
+  await writeAdminLog(env, row.issued_by, "recover_used", username + " 使用找回代码重置了密码");
+  return json({ ok: true, username });
 }
 
 // ========== 云空间 7 天试用活动 ==========
@@ -2668,6 +2813,7 @@ export default {
 
     if (url.pathname === "/" && request.method === "GET") {
       await ensureBuiltinAccounts(env); // 打开网站即兜底一次（内部 60 秒节流，节流命中时零开销）
+      await ensureBuiltinRooms(env);
       return new Response(html, {
         headers: { "content-type": "text/html; charset=utf-8" }
       });
@@ -2677,6 +2823,9 @@ export default {
     if (url.pathname === "/api/admin/create-invite" && request.method === "POST") return handleAdminCreateInvite(request, env);
     if (url.pathname === "/api/admin/invite-seen" && request.method === "POST") return handleAdminInviteSeen(request, env);
     if (url.pathname === "/api/admin/invites" && request.method === "GET") return handleAdminInvites(request, env);
+    if (url.pathname === "/api/admin/members" && request.method === "GET") return handleAdminMembers(request, env);
+    if (url.pathname === "/api/recover/issue" && request.method === "POST") return handleRecoverIssue(request, env);
+    if (url.pathname === "/api/recover/reset" && request.method === "POST") return handleRecoverReset(request, env);
     if (url.pathname === "/api/login" && request.method === "POST") return handleLogin(request, env);
     if (url.pathname === "/api/password" && request.method === "POST") return handlePasswordChange(request, env);
     if (url.pathname === "/api/me" && request.method === "GET") return handleMe(request, env);
