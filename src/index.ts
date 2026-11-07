@@ -2649,39 +2649,6 @@ async function handleMarketOrderFile(request: Request, env: Env): Promise<Respon
   return json({ name, mime, size: bytes.length, base64: bytesToBase64(bytes) });
 }
 
-
-// ===== ZIP 解压缩工具（浏览器内解压，平台不负担算力；按 1MB/50Credits 向使用者收费）=====
-const ZIP_FEE_PER_MB = 50; // 1MB 收 50 Credits，向上取整，至少收 1MB
-function zipCost(size: number): number {
-  const mb = Math.max(1, Math.ceil((size || 0) / (1024 * 1024)));
-  return mb * ZIP_FEE_PER_MB;
-}
-// 报价：前端弹窗前先问费用与余额是否足够
-async function handleZipQuote(request: Request, env: Env): Promise<Response> {
-  const user = await authUser(request, env);
-  if (!user) return json({ error: "未登录" }, 401);
-  let body: { size?: number };
-  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
-  const size = Math.max(0, Math.floor(Number(body.size) || 0));
-  const cost = zipCost(size);
-  const bal = await pointsOf(env, user.username);
-  return json({ cost, balance: bal, enough: bal >= cost });
-}
-// 扣费：确认付费后才真扣，并写日志；余额不足直接拒绝（任何调用解压工具都必须先过这一关）
-async function handleZipPay(request: Request, env: Env): Promise<Response> {
-  const user = await authUser(request, env);
-  if (!user) return json({ error: "未登录" }, 401);
-  let body: { size?: number };
-  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
-  const size = Math.max(0, Math.floor(Number(body.size) || 0));
-  const cost = zipCost(size);
-  if (!(await spendCredits(env, user.username, cost))) {
-    return json({ error: "Credits 不足：解压需 " + cost + " Credits（" + fmtMB(size) + "MB × " + ZIP_FEE_PER_MB + "/MB）", balance: await pointsOf(env, user.username) }, 402);
-  }
-  await logCredits(env, user.username, -cost, "ZIP 解压（" + fmtMB(size) + "MB · 1MB/" + ZIP_FEE_PER_MB + "Credits）");
-  return json({ ok: true, cost, balance: await pointsOf(env, user.username) });
-}
-
 const MATCH3_FEE = 10;
 
 async function handleGameCreate(request: Request, env: Env): Promise<Response> {
@@ -2951,9 +2918,6 @@ export default {
     if (url.pathname === "/api/market/file" && request.method === "GET") return handleMarketFile(request, env);
     if (url.pathname === "/api/market/order-file" && request.method === "GET") return handleMarketOrderFile(request, env);
     if (url.pathname === "/api/market/order-done" && request.method === "POST") return handleMarketOrderDone(request, env);
-    // ZIP 解压工具（浏览器内解压，付费）
-    if (url.pathname === "/api/zip/quote" && request.method === "POST") return handleZipQuote(request, env);
-    if (url.pathname === "/api/zip/pay" && request.method === "POST") return handleZipPay(request, env);
 
     if (url.pathname === "/room") {
       const token = url.searchParams.get("token") || "";

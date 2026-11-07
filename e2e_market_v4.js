@@ -1,4 +1,4 @@
-// 文件资源商店 V4 端到端测试：多份发售 + 按份收手续费 + ZIP 解压付费 + 下载交付清理
+// 文件资源商店 V4 端到端测试：多份发售 + 按份收手续费 + 文件夹包上架 + 下载交付清理
 // 用法：RA_PASS=xxx BASE=https://v7-chat.pages.dev node e2e_market_v4.js
 const BASE = process.env.BASE || "https://v7-chat.pages.dev";
 const RA_PASS = process.env.RA_PASS;
@@ -95,19 +95,11 @@ const pts = async (t) => (await call("GET", "/api/me", { token: t })).data.point
   r = await call("POST", "/api/market/buy", { body: { id: itemId }, token: bTok });
   ok("售罄后购买被拒(404/409)", r.status === 404 || r.status === 409, "status=" + r.status + " " + (r.data.error || ""));
 
-  // === ZIP 解压付费 ===
-  const bMid = await pts(bTok);
-  r = await call("POST", "/api/zip/quote", { body: { size: 2 * 1024 * 1024 }, token: bTok });
-  ok("ZIP 报价(2MB)=100", r.status === 200 && r.data.cost === 100, "cost=" + (r.data && r.data.cost));
-  r = await call("POST", "/api/zip/quote", { body: { size: 500 * 1024 }, token: bTok });
-  ok("ZIP 报价(0.5MB 向上取整)=50", r.status === 200 && r.data.cost === 50, "cost=" + (r.data && r.data.cost));
-  r = await call("POST", "/api/zip/pay", { body: { size: 2 * 1024 * 1024 }, token: bTok });
-  ok("ZIP 付费成功", r.status === 200 && r.data.ok && r.data.cost === 100, "status=" + r.status + " cost=" + (r.data && r.data.cost));
-  ok("ZIP 付费后余额-100", bMid - (await pts(bTok)) === 100, bMid + "→" + (await pts(bTok)));
-
-  // === ZIP 付费需登录 ===
-  r = await call("POST", "/api/zip/quote", { body: { size: 1024 } });
-  ok("ZIP 未登录被拒(401)", r.status === 401, "status=" + r.status);
+  // === ZIP 解压端点已随独立解压工具一并移除（2026-11-07）：请求应返回 404 ===
+  r = await call("POST", "/api/zip/quote", { body: { size: 1024 }, token: bTok });
+  ok("ZIP 报价端点已移除(404)", r.status === 404, "status=" + r.status);
+  r = await call("POST", "/api/zip/pay", { body: { size: 1024 }, token: bTok });
+  ok("ZIP 付费端点已移除(404)", r.status === 404, "status=" + r.status);
 
   // === 文件夹包（kind=zip）上架与列表 ===
   r = await call("POST", "/api/market/upload?name=folder.zip&mime=application/zip&price=30&kind=zip&copies=1", { token: sTok, raw: new TextEncoder().encode("PK\x03\x04fake-zip-bytes"), ct: "application/zip" });

@@ -477,6 +477,14 @@
   .cs-v { color: var(--text); font-weight:600; }
   .cs-bar { height:8px; background: rgba(255,255,255,.08); border-radius:6px; margin-top:8px; overflow:hidden; }
   .cs-fill { height:100%; background: linear-gradient(90deg,#b14bff,#00ff96); }
+  /* 上传进度条：配色与云存储条一致（彩色渐变） */
+  .prog-bar { height:8px; background: rgba(255,255,255,.08); border-radius:6px; overflow:hidden; }
+  .prog-fill { height:100%; width:0%; background: linear-gradient(90deg,#b14bff,#00ff96); transition: width .15s linear; }
+  .up-progress { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); z-index:9999;
+    width:min(420px,86vw); background:rgba(20,20,30,.96); border:1px solid rgba(177,75,255,.45);
+    border-radius:12px; padding:12px 14px; box-shadow:0 8px 30px rgba(0,0,0,.5); }
+  .up-label { font-size:13px; color:#fff; margin-bottom:6px; word-break:break-all; }
+  .up-status { font-size:12px; color:#9aa; margin-top:6px; min-height:14px; }
   .cloud-section { margin-bottom:14px; padding-bottom:12px; border-bottom:1px solid rgba(255,255,255,.06); }
   .cloud-files { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
   .cf-row { display:flex; align-items:center; gap:8px; background:rgba(255,255,255,.03); border:1px solid var(--line); border-radius:10px; padding:8px 10px; flex-wrap:wrap; }
@@ -744,7 +752,7 @@
         <p class="market-note">
           任何人可自由上传文件（或整个文件夹，将自动打包为 ZIP）并自行标价，可设定 <b>上架份数（1~500）</b>。
           每份独立成交：买家付 <b>全价</b>，平台收 <b>5%</b> 手续费，卖家得 <b>95%</b>，同一文件可多次卖出、多次收款。
-          单包上限 20MB。ZIP 包购买后若存入云空间 <b>不解压</b>，需下载到本机时才解压（解压工具：1MB/50Credits）。
+          单包上限 20MB。ZIP 包购买后若存入云空间保持 ZIP 原样，下载到本机后用系统自带解压（如 Windows 资源管理器）即可免费解压。
         </p>
 
         <div class="market-form">
@@ -775,11 +783,6 @@
         <div class="err" id="mktUploadErr"></div>
 
         <div class="market-list" id="mktList"></div>
-
-        <div class="tool-row" style="margin-top:14px">
-          <button class="btn small magenta" id="btnZipTool">🗜 ZIP 解压缩工具</button>
-          <span class="market-note" style="margin:0">独立解压：上传 ZIP → 付费解压（1MB/50Credits）→ 转云或下载</span>
-        </div>
       </div>
 
       <div class="tool-row"><button class="btn small magenta" id="btnShopBack">▸ 返回聊天</button></div>
@@ -1217,26 +1220,6 @@
   <div class="tool-row" style="justify-content:center;margin-bottom:0">
     <button class="btn" id="btnRepostConfirm">▸ 确认转载（扣费）</button>
     <button class="btn small magenta" id="btnRepostCancel">取消</button>
-  </div>
-</div>
-
-<div class="modal hidden" id="zipToolModal">
-  <div class="modal-box" style="max-width:560px;text-align:left">
-    <div class="modal-title">🗜 ZIP 解压缩工具</div>
-    <p class="market-note" style="margin:0 0 10px">
-      上传一个 ZIP 文件，确认付费后在<b>浏览器内</b>解压（<b>1MB/50Credits</b>，平台不在服务端解压）。
-      解压后的文件可<b>转至云存储</b>或<b>下载到本机</b>。
-    </p>
-    <div class="field">
-      <label>选择 ZIP 文件</label>
-      <input type="file" id="zipToolFile" accept=".zip,application/zip">
-    </div>
-    <div class="err" id="zipToolErr"></div>
-    <div class="market-list" id="zipToolResults" style="margin-top:10px"></div>
-    <div class="tool-row" style="justify-content:center;margin-bottom:0">
-      <button class="btn" id="btnZipToolRun">▸ 付费解压</button>
-      <button class="btn small magenta" id="btnZipToolClose">关闭</button>
-    </div>
   </div>
 </div>
 </div>
@@ -3600,71 +3583,35 @@
         mktUploadErr.textContent = '请先选择文件或文件夹';
         btn.disabled = false; return;
       }
-      var r = await fetch('/api/market/upload?name=' + encodeURIComponent(name) +
-        '&mime=' + encodeURIComponent(mime) +
-        '&price=' + price + '&desc=' + encodeURIComponent(desc) +
-        '&kind=' + kind + '&copies=' + copies, {
-        method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: blob
-      });
-      var d = {};
-      try { d = await r.json(); } catch (e) {}
-      if (r.ok && d.ok) {
-        fileEl.value = ''; folderEl.value = ''; document.getElementById('mktDesc').value = '';
-        mktUploadErr.textContent = '';
-        appendSys('已上架：' + name + '（标价 ' + price + ' Credits · 份数 ' + copies + (kind === 'zip' ? ' · 文件夹包' : '') + '）');
-        loadMarket(); refreshMe();
-      } else {
-        mktUploadErr.textContent = d.error || ('上架失败（HTTP ' + r.status + '）');
+      var pb = uploadProgressBar('上架上传：' + name);
+      var r;
+      try {
+        r = await uploadWithProgress('/api/market/upload?name=' + encodeURIComponent(name) +
+          '&mime=' + encodeURIComponent(mime) +
+          '&price=' + price + '&desc=' + encodeURIComponent(desc) +
+          '&kind=' + kind + '&copies=' + copies,
+          blob, { Authorization: 'Bearer ' + token }, function (p) { pb.set(p); });
+      } catch (e) {
+        var st = e && e.status;
+        pb.fail(st, (e && e.data && e.data.error) || '上架失败');
+        mktUploadErr.textContent = (e && e.data && e.data.error) || ('上架失败（HTTP ' + st + '）');
+        if (st === 500 || st === 503) appendSys('上架上传失败：服务 ' + st);
+        btn.disabled = false; return;
       }
+      pb.done('已上架：' + name);
+      fileEl.value = ''; folderEl.value = ''; document.getElementById('mktDesc').value = '';
+      mktUploadErr.textContent = '';
+      appendSys('已上架：' + name + '（标价 ' + price + ' Credits · 份数 ' + copies + (kind === 'zip' ? ' · 文件夹包' : '') + '）');
+      loadMarket(); refreshMe();
     } catch (e) {
       mktUploadErr.textContent = '上架失败：' + (e && e.message ? e.message : '网络错误');
     }
     btn.disabled = false;
   });
 
-  // ===== ZIP 工具（浏览器内解压 / 文件夹打包，依赖内联的 fflate）=====
-  // 解压为付费操作：每次调用都先弹窗确认扣费，余额不足直接拒绝（平台不在服务端解压，不负担算力）
-  var ZIP_FEE_PER_MB = 50;
-  function zipCost(size) { return Math.max(1, Math.ceil((size || 0) / (1024 * 1024))) * ZIP_FEE_PER_MB; }
-  function isZipName(name, mime) {
-    return /(\.zip)$/i.test(name || '') || (mime || '').toLowerCase().indexOf('zip') >= 0;
-  }
-  function guessMime(name) {
-    var ext = (name.split('.').pop() || '').toLowerCase();
-    var map = { txt:'text/plain', md:'text/markdown', markdown:'text/markdown', html:'text/html', htm:'text/html',
-      css:'text/css', js:'text/javascript', json:'application/json', png:'image/png', jpg:'image/jpeg', jpeg:'image/jpeg',
-      gif:'image/gif', svg:'image/svg+xml', pdf:'application/pdf', doc:'application/msword',
-      docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      xls:'application/vnd.ms-excel', xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      ppt:'application/vnd.ms-powerpoint', pptx:'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      zip:'application/zip', mp3:'audio/mpeg', mp4:'video/mp4', wav:'audio/wav' };
-    return map[ext] || 'application/octet-stream';
-  }
-
+  // ===== 文件夹打包（依赖内联的 fflate，浏览器内压缩，用于商店上架文件夹）=====
   var ZIPTools = (function () {
     function eng() { return window.fflate; }
-    // 付费解压：弹窗确认 → 扣费 → 返回 { name: Uint8Array }
-    async function unzipPaid(blob) {
-      if (!eng()) throw new Error('解压引擎未加载，请刷新页面');
-      var size = blob.size;
-      var q = { cost: zipCost(size), balance: 0, enough: false };
-      try { var r = await api('/api/zip/quote', { size: size }); if (r.ok) q = r.data; } catch (e) {}
-      await new Promise(function (resolve, reject) {
-        showFileConfirm('▸ ZIP 解压确认（付费）', [
-          '文件大小：' + fmtSize(size),
-          '费用：' + q.cost + ' Credits（1MB/50Credits）',
-          '当前余额：' + q.balance + ' Credits'
-        ], q.enough, '▸ 确认解压并付费', async function () {
-          try {
-            var r = await api('/api/zip/pay', { size: size });
-            if (!r.ok) { reject(new Error(r.data.error || '支付失败')); return; }
-            resolve(r.data.cost);
-          } catch (e) { reject(e); }
-        }, function () { reject(new Error('已取消解压')); });
-      });
-      var buf = new Uint8Array(await blob.arrayBuffer());
-      return eng().unzipSync(buf); // { name: Uint8Array }
-    }
     // 文件夹打包：把多个文件压成 ZIP（浏览器内完成）
     async function zipFiles(fileList, level) {
       if (!eng()) throw new Error('打包引擎未加载，请刷新页面');
@@ -3677,81 +3624,51 @@
       }
       return eng().zipSync(entries, { level: (typeof level === 'number' ? level : 6) });
     }
-    return { unzipPaid: unzipPaid, zipFiles: zipFiles };
+    return { zipFiles: zipFiles };
   })();
 
-  // 把解压结果（{name:Uint8Array}）渲染成列表，每个文件可下载 / 转云存储
-  function renderUnzipResults(container, filesMap) {
-    container.innerHTML = '';
-    var names = Object.keys(filesMap || {});
-    if (!names.length) { container.innerHTML = '<div class="market-empty">ZIP 内没有可解压的文件</div>'; return; }
-    names.forEach(function (name) {
-      var data = filesMap[name];
-      var size = data ? data.length : 0;
-      var div = document.createElement('div'); div.className = 'market-item';
-      var top = document.createElement('div'); top.className = 'mi-top';
-      var nm = document.createElement('span'); nm.className = 'mi-name'; nm.textContent = name;
-      var sz = document.createElement('span'); sz.className = 'mi-price'; sz.innerHTML = fmtSize(size);
-      top.appendChild(nm); top.appendChild(sz); div.appendChild(top);
-      var ops = document.createElement('div'); ops.className = 'mi-ops';
-      var dl = document.createElement('button'); dl.className = 'btn small'; dl.textContent = '⬇ 下载';
-      dl.addEventListener('click', async function () {
-        try {
-          var mime = guessMime(name);
-          var blob = new Blob([filesMap[name]], { type: mime });
-          await saveBlobToDisk(blob, name);
-        } catch (e) { if (!(e && e.cancelled)) appendSys('下载失败：' + (e.message || '未知错误')); }
-      });
-      var sv = document.createElement('button'); sv.className = 'btn small'; sv.textContent = '☁ 转云存储';
-      sv.addEventListener('click', async function () {
-        sv.disabled = true;
-        try {
-          var mime = guessMime(name);
-          var blob = new Blob([filesMap[name]], { type: mime });
-          await uploadCloudBlob(blob, name, mime);
-        } catch (e) { appendSys('转云失败'); }
-        sv.disabled = false;
-      });
-      ops.appendChild(dl); ops.appendChild(sv); div.appendChild(ops);
-      container.appendChild(div);
+  // ===== 带进度上报的上传（XHR 才能拿到上传进度；失败直接抛出 HTTP 状态码，便于上报 500/503）=====
+  function uploadWithProgress(url, body, headers, onProgress) {
+    return new Promise(function (resolve, reject) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', url);
+      if (headers) Object.keys(headers).forEach(function (k) { xhr.setRequestHeader(k, headers[k]); });
+      xhr.upload.onprogress = function (e) {
+        if (e.lengthComputable && onProgress) onProgress(Math.round(e.loaded / e.total * 100));
+      };
+      xhr.onload = function () {
+        var resp; try { resp = JSON.parse(xhr.responseText); } catch (e) { resp = {}; }
+        if (xhr.status >= 200 && xhr.status < 300) resolve({ status: xhr.status, data: resp });
+        else reject({ status: xhr.status, data: resp });
+      };
+      xhr.onerror = function () { reject({ status: 0, data: { error: '网络错误' } }); };
+      xhr.send(body);
     });
   }
-
-  // ZIP 解压缩工具弹窗：上传 ZIP → 付费解压 → 列出文件（下载 / 转云）
-  var zipToolModal = document.getElementById('zipToolModal');
-  var zipToolFile = document.getElementById('zipToolFile');
-  var zipToolResults = document.getElementById('zipToolResults');
-  var zipToolErr = document.getElementById('zipToolErr');
-  function runZipToolOnBlob(blob, label) {
-    zipToolResults.innerHTML = '<div class="market-empty">正在解压 ' + (label || '') + ' …</div>';
-    zipToolErr.textContent = '';
-    zipToolModal.classList.remove('hidden');
-    ZIPTools.unzipPaid(blob).then(function (files) {
-      renderUnzipResults(zipToolResults, files);
-      appendSys('解压完成：共 ' + Object.keys(files).length + ' 个文件');
-      refreshMe();
-    }).catch(function (e) {
-      zipToolResults.innerHTML = '';
-      if (!(e && e.message === '已取消解压')) zipToolErr.textContent = (e && e.message) ? e.message : '解压失败';
-    });
-  }
-  document.getElementById('btnZipTool').addEventListener('click', function () {
-    zipToolResults.innerHTML = ''; zipToolErr.textContent = ''; zipToolFile.value = '';
-    zipToolModal.classList.remove('hidden');
-  });
-  document.getElementById('btnZipToolClose').addEventListener('click', function () { zipToolModal.classList.add('hidden'); });
-  document.getElementById('btnZipToolRun').addEventListener('click', async function () {
-    var f = zipToolFile.files && zipToolFile.files[0];
-    if (!f) { zipToolErr.textContent = '请先选择 ZIP 文件'; return; }
-    this.disabled = true; this.textContent = '解压中…';
-    try {
-      await runZipToolOnBlob(f, f.name);
-    } catch (e) {
-      zipToolErr.textContent = (e && e.message) ? e.message : '解压失败';
-    } finally {
-      this.disabled = false; this.textContent = '▸ 付费解压';
+  // 浮动进度条：所有上传共用同一个；返回 set/done/fail 控制器
+  var _upBar = null;
+  function uploadProgressBar(label) {
+    if (!_upBar) {
+      _upBar = document.createElement('div');
+      _upBar.className = 'up-progress hidden';
+      _upBar.innerHTML = '<div class="up-label"></div><div class="prog-bar"><div class="prog-fill"></div></div><div class="up-status"></div>';
+      document.body.appendChild(_upBar);
     }
-  });
+    var fill = _upBar.querySelector('.prog-fill');
+    var lbl = _upBar.querySelector('.up-label');
+    var st = _upBar.querySelector('.up-status');
+    lbl.textContent = label || '上传中…';
+    fill.style.width = '0%'; st.textContent = ''; st.style.color = '';
+    _upBar.classList.remove('hidden');
+    return {
+      set: function (p) { fill.style.width = Math.max(0, Math.min(100, p)) + '%'; },
+      done: function (msg) { st.textContent = msg || '完成'; st.style.color = ''; setTimeout(function () { _upBar.classList.add('hidden'); }, 1500); },
+      fail: function (status, msg) {
+        st.textContent = (msg || '上传失败') + (status ? '（HTTP ' + status + '）' : '');
+        st.style.color = '#ff6b6b';
+      }
+    };
+  }
 
   // ===== 云存储 =====
   var repostFileId = null;
@@ -3810,18 +3727,6 @@
       var sz = document.createElement('span'); sz.className = 'cf-size'; sz.textContent = fmtSize(f.size);
       var dl = document.createElement('button'); dl.className = 'btn small'; dl.textContent = '下载';
       dl.addEventListener('click', function () { downloadCloud(f.id, f.name, f.mime); });
-      // ZIP 包：存云空间时仅存 ZIP（不解压）；用户要下载到本机时再用解压工具（付费）逐文件取出
-      if (isZipName(f.name, f.mime)) {
-        var uz = document.createElement('button'); uz.className = 'btn small'; uz.textContent = '解压';
-        uz.addEventListener('click', async function () {
-          try {
-            appendSys('正在从云空间拉取「' + f.name + '」…');
-            var blob = await (await fetch('/api/cloud/file?id=' + encodeURIComponent(f.id), { headers: { Authorization: 'Bearer ' + token } })).blob();
-            runZipToolOnBlob(blob, f.name);
-          } catch (e) { appendSys('拉取失败：' + (e && e.message ? e.message : '未知错误')); }
-        });
-        row.appendChild(uz);
-      }
       var rp = document.createElement('button'); rp.className = 'btn small'; rp.textContent = '转载';
       rp.addEventListener('click', function () { openRepost(f.id, f.name, f.size); });
       var del = document.createElement('button'); del.className = 'btn small magenta'; del.textContent = '删除';
@@ -3831,7 +3736,7 @@
         if (!rr.ok) { alert(rr.data.error || '删除失败'); return; }
         loadCloud();
       });
-      row.appendChild(nm); row.appendChild(sz); row.appendChild(dl); if (uz) row.appendChild(uz); row.appendChild(rp); row.appendChild(del);
+      row.appendChild(nm); row.appendChild(sz); row.appendChild(dl); row.appendChild(rp); row.appendChild(del);
       box.appendChild(row);
     });
   }
@@ -3850,14 +3755,19 @@
       .catch(function (e) { appendSys('云文件下载失败：' + (e && e.message ? e.message : '未知错误')); });
   }
   async function uploadCloudBlob(blob, name, mime) {
+    var pb = uploadProgressBar('上传到云存储：' + name);
     try {
-      var r = await fetch('/api/cloud/upload?name=' + encodeURIComponent(name) + '&mime=' + encodeURIComponent(mime || 'application/octet-stream'), {
-        method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: blob
-      });
-      var d = {}; try { d = await r.json(); } catch (e) {}
-      if (!d.ok) appendSys(d.error || '保存到云失败');
-      else { appendSys('已保存到云存储：' + name); loadCloud(); }
-    } catch (e) { appendSys('保存到云失败'); }
+      var r = await uploadWithProgress(
+        '/api/cloud/upload?name=' + encodeURIComponent(name) + '&mime=' + encodeURIComponent(mime || 'application/octet-stream'),
+        blob, { Authorization: 'Bearer ' + token }, function (p) { pb.set(p); });
+      pb.done('已保存到云：' + name);
+      appendSys('已保存到云存储：' + name);
+      loadCloud();
+    } catch (e) {
+      var status = e && e.status;
+      pb.fail(status, (e && e.data && e.data.error) || '保存到云失败');
+      if (status === 500 || status === 503) appendSys('云上传失败：服务 ' + status);
+    }
   }
   function triggerDownload(blob, name) {
     var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove();
