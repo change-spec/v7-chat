@@ -938,6 +938,13 @@ async function ensureSchema(env: Env): Promise<void> {
     try { await env.DB.prepare("ALTER TABLE cloud_subs ADD COLUMN reclaim_pending INTEGER NOT NULL DEFAULT 0").run(); } catch {}
     // accounts.belongs_to：新用户归属的管理员（用于管理员小群与「成员信息」页）
     try { await env.DB.prepare("ALTER TABLE accounts ADD COLUMN belongs_to TEXT").run(); } catch {}
+    // market_items.kind：file=普通文件；zip=整个文件夹打包成的 ZIP（上架时由浏览器压缩）
+    try { await env.DB.prepare("ALTER TABLE market_items ADD COLUMN kind TEXT NOT NULL DEFAULT 'file'").run(); } catch {}
+    // market_items.copies_total / copies_sold：同一文件可上架多份（1~500），每卖出一份平台收一次手续费
+    try { await env.DB.prepare("ALTER TABLE market_items ADD COLUMN copies_total INTEGER NOT NULL DEFAULT 1").run(); } catch {}
+    try { await env.DB.prepare("ALTER TABLE market_items ADD COLUMN copies_sold INTEGER NOT NULL DEFAULT 0").run(); } catch {}
+    // market_orders.done：下载交付的买家确认落盘后置 1，用于多份售卖时统一清理后端文件
+    try { await env.DB.prepare("ALTER TABLE market_orders ADD COLUMN done INTEGER NOT NULL DEFAULT 0").run(); } catch {}
   } catch {}
 }
 
@@ -2369,19 +2376,36 @@ async function deleteMarketBytes(env: Env, itemId: string, storage: string | nul
   await env.DB.prepare("DELETE FROM market_files WHERE file_id = ?").bind(itemId).run();
 }
 
+// 多份售卖清理：仅当「已售罄 且 没有尚未确认落盘的下载交付订单」时才删除后端文件与商品行。
+// 否则必须保留文件——可能还有份数未售出，或别的买家的下载交付还没完成。
+async function cleanupMarketItemIfDone(env: Env, id: string, storage: string | null): Promise<void> {
+  const after = await env.DB.prepare("SELECT copies_sold, copies_total FROM market_items WHERE id = ?").bind(id).first<{ copies_sold: number; copies_total: number }>();
+  if (!after) return;                                  // 已删除
+  if (after.copies_sold < after.copies_total) return;   // 还有份数未售
+  const pend = await env.DB.prepare("SELECT COUNT(*) AS n FROM market_orders WHERE item_id = ? AND deliver = 'download' AND done = 0").bind(id).first<{ n: number }>();
+  if (pend && pend.n > 0) return;                      // 下载交付尚未确认落盘
+  await deleteMarketBytes(env, id, storage);
+  await env.DB.prepare("DELETE FROM market_items WHERE id = ?").bind(id).run();
+}
+
 // 商品列表：在售 + 我卖出的
 async function handleMarketList(request: Request, env: Env): Promise<Response> {
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
-  // 只返回在售商品（已售出的商品成交即从 market_items 删除）
+  // 只返回在售商品（copies_sold < copies_total 即在售；全部卖完且后端文件清理后才删除）
   const { results } = await env.DB.prepare(
-    "SELECT id, seller, name, size, mime, desc, price, created_at FROM market_items WHERE sold = 0 ORDER BY created_at DESC LIMIT 100"
+    "SELECT id, seller, name, size, mime, desc, price, kind, copies_total, copies_sold, created_at FROM market_items WHERE copies_sold < copies_total ORDER BY created_at DESC LIMIT 100"
   ).all<any>();
-  const items = (results || []).map((r) => ({
-    id: r.id, seller: r.seller, name: r.name, size: r.size, mime: r.mime,
-    desc: r.desc, price: r.price, sold: false,
-    mine: r.seller === user.username
-  }));
+  const items = (results || []).map((r) => {
+    const total = r.copies_total || 1;
+    const sold = r.copies_sold || 0;
+    return {
+      id: r.id, seller: r.seller, name: r.name, size: r.size, mime: r.mime,
+      desc: r.desc, price: r.price, kind: r.kind || "file",
+      copiesTotal: total, copiesSold: sold, remaining: total - sold,
+      sold: false, mine: r.seller === user.username
+    };
+  });
   // 我买过的 / 我卖出的（成交记录）
   let orders: any[] = [];
   try {
@@ -2410,6 +2434,12 @@ async function handleMarketUpload(request: Request, env: Env): Promise<Response>
   if (!isFinite(price) || price < 1 || price > MARKET_MAX_PRICE) {
     return json({ error: "标价限 1-" + MARKET_MAX_PRICE + " Credits" }, 400);
   }
+  // kind：file=普通文件；zip=整个文件夹打包（由卖家浏览器压缩成 ZIP 后上传）
+  const kind = url.searchParams.get("kind") === "zip" ? "zip" : "file";
+  // copies：同一文件上架份数，1~500；每份独立成交、独立收一次手续费
+  let copies = Math.floor(Number(url.searchParams.get("copies")));
+  if (!isFinite(copies) || copies < 1) copies = 1;
+  if (copies > 500) copies = 500;
   let buf: ArrayBuffer;
   try { buf = await request.arrayBuffer(); } catch { return json({ error: "读取文件失败" }, 400); }
   const size = buf.byteLength;
@@ -2420,10 +2450,10 @@ async function handleMarketUpload(request: Request, env: Env): Promise<Response>
   const id = "m" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const storage = await storeMarketBytes(env, id, new Uint8Array(buf), mime);
   await env.DB.prepare(
-    "INSERT INTO market_items (id, seller, name, size, mime, desc, price, storage, sold, buyer, sold_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?)"
-  ).bind(id, user.username, name, size, mime, desc, price, storage, new Date().toISOString()).run();
-  await logCredits(env, user.username, 0, "上架商品 " + name + "（标价 " + price + " Credits）");
-  return json({ ok: true, id, price, size, balance: await pointsOf(env, user.username) });
+    "INSERT INTO market_items (id, seller, name, size, mime, desc, price, storage, kind, copies_total, copies_sold, sold, buyer, sold_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, NULL, NULL, ?)"
+  ).bind(id, user.username, name, size, mime, desc, price, storage, kind, copies, new Date().toISOString()).run();
+  await logCredits(env, user.username, 0, "上架商品 " + name + "（标价 " + price + " Credits · 份数 " + copies + "）");
+  return json({ ok: true, id, price, size, kind, copies, balance: await pointsOf(env, user.username) });
 }
 
 // 购买：扣买家总价 → 5% 手续费 → 95% 给卖家
@@ -2438,7 +2468,7 @@ async function handleMarketBuy(request: Request, env: Env): Promise<Response> {
   const deliver = body.deliver === "cloud" ? "cloud" : "download";
   const item = await env.DB.prepare("SELECT * FROM market_items WHERE id = ?").bind(id).first<any>();
   if (!item) return json({ error: "商品不存在" }, 404);
-  if (item.sold) return json({ error: "该商品已被购买" }, 409);
+  if (item.copies_sold >= item.copies_total) return json({ error: "该商品已售罄" }, 409);
   if (item.seller === user.username) return json({ error: "不能购买自己上架的商品" }, 400);
 
   const price = item.price;
@@ -2461,9 +2491,10 @@ async function handleMarketBuy(request: Request, env: Env): Promise<Response> {
     await logCredits(env, item.seller, 0, "售出商品 " + item.name + "（标价 " + price + "，手续费 " + fee + "，实收 0）");
   }
 
-  // 标记已售（用条件更新防止并发重复售出）
-  const upd = await env.DB.prepare("UPDATE market_items SET sold = 1, buyer = ?, sold_at = ? WHERE id = ? AND sold = 0")
-    .bind(user.username, new Date().toISOString(), id).run();
+  // 标记已售（原子自增 + 条件更新防止并发重复售出同一份）
+  const upd = await env.DB.prepare(
+    "UPDATE market_items SET copies_sold = copies_sold + 1, sold = (CASE WHEN copies_sold + 1 >= copies_total THEN 1 ELSE sold END), buyer = ?, sold_at = ? WHERE id = ? AND copies_sold < copies_total"
+  ).bind(user.username, new Date().toISOString(), id).run();
   const changed = (upd as any).meta && (upd as any).meta.changes;
   if (changed === 0) {
     // 并发下被别的买家抢先 —— 回滚本次扣款
@@ -2504,15 +2535,9 @@ async function handleMarketBuy(request: Request, env: Env): Promise<Response> {
       price, fee, payout, deliveredId || null, deliver, new Date().toISOString()).run();
   } catch {}
 
-  // deliver=cloud 且转存成功 → 商品与后端文件立即删除（已售出不留在商店）
-  // deliver=download → 商品标记已售但保留文件，等买家下载完再清理
-  if (deliveredId) {
-    await deleteMarketBytes(env, id, item.storage);
-    await env.DB.prepare("DELETE FROM market_items WHERE id = ?").bind(id).run();
-  } else {
-    await env.DB.prepare("UPDATE market_items SET sold = 1, buyer = ?, sold_at = ? WHERE id = ?")
-      .bind(user.username, new Date().toISOString(), id).run();
-  }
+  // 成交后统一清理：已售罄且所有下载交付都已落盘，才删除后端文件与商品行；
+  // 否则保留（可能还有份数未售，或别的买家的下载交付还没完成）
+  await cleanupMarketItemIfDone(env, id, item.storage);
 
   return json({
     ok: true, price, fee, payout, deliver, orderId,
@@ -2533,7 +2558,9 @@ async function handleMarketRemove(request: Request, env: Env): Promise<Response>
   if (item.seller !== user.username && user.role !== "root-admin") {
     return json({ error: "只能下架自己上架的商品" }, 403);
   }
-  if (item.sold) return json({ error: "已售出的商品已自动下架" }, 409);
+  if (item.copies_sold > 0) {
+    return json({ error: "已有 " + item.copies_sold + " 份售出，无法下架（需等买家全部收齐）" }, 409);
+  }
   await deleteMarketBytes(env, id, item.storage);
   await env.DB.prepare("DELETE FROM market_items WHERE id = ?").bind(id).run();
   return json({ ok: true });
@@ -2547,8 +2574,8 @@ async function handleMarketFile(request: Request, env: Env): Promise<Response> {
   if (!id) return json({ error: "缺少商品" }, 400);
   const item = await env.DB.prepare("SELECT * FROM market_items WHERE id = ?").bind(id).first<any>();
   if (!item) return json({ error: "商品不存在（可能已售出并下架）" }, 404);
-  if (!item.sold && item.seller !== user.username) {
-    return json({ error: "该商品未售出，暂不能下载" }, 403);
+  if (item.copies_sold > 0 && item.seller !== user.username) {
+    return json({ error: "该商品已售出，暂不能试读" }, 403);
   }
   const bytes = await loadMarketBytes(env, id, item.storage);
   if (!bytes) return json({ error: "文件数据已丢失" }, 410);
@@ -2574,13 +2601,11 @@ async function handleMarketOrderDone(request: Request, env: Env): Promise<Respon
   const ord = await env.DB.prepare("SELECT * FROM market_orders WHERE id = ?").bind(id).first<any>();
   if (!ord) return json({ ok: true, cleaned: false });
   if (ord.buyer !== user.username) return json({ error: "无权操作" }, 403);
-  // 只有 deliver=download 且文件仍在服务器上时才清理
+  // 只有 deliver=download 且文件仍在服务器上时才清理：先标记该订单已落盘，再统一判断能否删
   if (!ord.delivered_id && ord.deliver === "download") {
+    await env.DB.prepare("UPDATE market_orders SET done = 1 WHERE id = ?").bind(id).run();
     const it = await env.DB.prepare("SELECT id, storage FROM market_items WHERE id = ?").bind(ord.item_id).first<any>();
-    if (it) {
-      await deleteMarketBytes(env, it.id, it.storage);
-      await env.DB.prepare("DELETE FROM market_items WHERE id = ?").bind(it.id).run();
-    }
+    if (it) await cleanupMarketItemIfDone(env, it.id, it.storage);
   }
   return json({ ok: true, cleaned: true });
 }
@@ -2624,6 +2649,38 @@ async function handleMarketOrderFile(request: Request, env: Env): Promise<Respon
   return json({ name, mime, size: bytes.length, base64: bytesToBase64(bytes) });
 }
 
+
+// ===== ZIP 解压缩工具（浏览器内解压，平台不负担算力；按 1MB/50Credits 向使用者收费）=====
+const ZIP_FEE_PER_MB = 50; // 1MB 收 50 Credits，向上取整，至少收 1MB
+function zipCost(size: number): number {
+  const mb = Math.max(1, Math.ceil((size || 0) / (1024 * 1024)));
+  return mb * ZIP_FEE_PER_MB;
+}
+// 报价：前端弹窗前先问费用与余额是否足够
+async function handleZipQuote(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  let body: { size?: number };
+  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  const size = Math.max(0, Math.floor(Number(body.size) || 0));
+  const cost = zipCost(size);
+  const bal = await pointsOf(env, user.username);
+  return json({ cost, balance: bal, enough: bal >= cost });
+}
+// 扣费：确认付费后才真扣，并写日志；余额不足直接拒绝（任何调用解压工具都必须先过这一关）
+async function handleZipPay(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  let body: { size?: number };
+  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  const size = Math.max(0, Math.floor(Number(body.size) || 0));
+  const cost = zipCost(size);
+  if (!(await spendCredits(env, user.username, cost))) {
+    return json({ error: "Credits 不足：解压需 " + cost + " Credits（" + fmtMB(size) + "MB × " + ZIP_FEE_PER_MB + "/MB）", balance: await pointsOf(env, user.username) }, 402);
+  }
+  await logCredits(env, user.username, -cost, "ZIP 解压（" + fmtMB(size) + "MB · 1MB/" + ZIP_FEE_PER_MB + "Credits）");
+  return json({ ok: true, cost, balance: await pointsOf(env, user.username) });
+}
 
 const MATCH3_FEE = 10;
 
@@ -2894,6 +2951,9 @@ export default {
     if (url.pathname === "/api/market/file" && request.method === "GET") return handleMarketFile(request, env);
     if (url.pathname === "/api/market/order-file" && request.method === "GET") return handleMarketOrderFile(request, env);
     if (url.pathname === "/api/market/order-done" && request.method === "POST") return handleMarketOrderDone(request, env);
+    // ZIP 解压工具（浏览器内解压，付费）
+    if (url.pathname === "/api/zip/quote" && request.method === "POST") return handleZipQuote(request, env);
+    if (url.pathname === "/api/zip/pay" && request.method === "POST") return handleZipPay(request, env);
 
     if (url.pathname === "/room") {
       const token = url.searchParams.get("token") || "";
