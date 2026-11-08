@@ -1764,16 +1764,53 @@ async function handleCloudList(request: Request, env: Env): Promise<Response> {
   return json({ files: results || [], source: "d1" });
 }
 
-// 运维自检：副本层状态（不含任何密钥 / 用户数据）
-// ?bootstrap=1 时额外尝试一次性自动建表，用于首次启用 / 故障排查
+// 只读统计 Supabase Storage 桶内 cloud/ 前缀下的真实对象数与字节数（分页遍历）
+async function sbStorageUsage(env: Env): Promise<any> {
+  if (!sbEnabled(env)) return { enabled: false };
+  const bucket = sbBucket(env);
+  const limit = 1000;
+  let offset = 0, bytes = 0;
+  const names: string[] = [];
+  for (let page = 0; page < 10; page++) {
+    const r = await fetch(env.SUPABASE_URL + "/storage/v1/object/list/" + bucket, {
+      method: "POST",
+      headers: sbHeaders(env, { "Content-Type": "application/json" }),
+      body: JSON.stringify({ prefix: SB_PATH_PREFIX, limit, offset, sortBy: { column: "name", order: "asc" } }),
+      signal: AbortSignal.timeout(4000)
+    });
+    if (!r.ok) return { enabled: true, bucket, error: "list HTTP " + r.status };
+    const arr: any[] = await r.json();
+    for (const o of arr) {
+      const sz = Number((o && (o.metadata?.size ?? o.size)) || 0);
+      bytes += sz; names.push(String(o.name));
+    }
+    if (arr.length < limit) break;
+    offset += limit;
+  }
+  // 与 D1 元数据比对，找出「孤儿对象」（元数据已删但对象还在）与「缺失对象」
+  const { results } = await env.DB.prepare("SELECT id FROM cloud_files WHERE storage = 'supabase'").all<{ id: string }>();
+  const meta = new Set((results || []).map((r) => r.id));
+  const objs = new Set(names);
+  const orphanObjects = names.filter((n) => !meta.has(n)).slice(0, 20);
+  const missingObjects = [...meta].filter((id) => !objs.has(id)).slice(0, 20);
+  return {
+    enabled: true, bucket, objects: names.length, bytes, mb: +(bytes / 1048576).toFixed(2),
+    metaSupabase: meta.size, orphanObjects, missingObjects, sample: names.slice(0, 3)
+  };
+}
+
+// 运维自检：副本层状态 + 可选 Storage 用量（不含任何密钥 / 用户数据）
+// ?bootstrap=1 尝试一次性自动建表；?storage=1 统计 Supabase 实际占用。仅登录用户可见细节。
 async function handleCloudPgHealth(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const user = await authUser(request, env);
-  // 诊断细节（表结构 / 端点状态）仅登录用户可见，避免对外泄露内部信息
+  // 诊断细节（表结构 / 端点状态 / 用量）仅登录用户可见，避免对外泄露内部信息
   const ready = await pgEnsure(env, !!user && url.searchParams.get("bootstrap") === "1");
   const base = { enabled: sbEnabled(env), ready, truth: "d1", mode: "read-replica+disaster-recovery" };
   if (!user) return json(base);
-  return json({ ...base, table: PG_TABLE, probe: pgDiag.probe, bootstrap: pgDiag.bootstrap, tables: pgDiag.tables });
+  const out: any = { ...base, table: PG_TABLE, probe: pgDiag.probe, bootstrap: pgDiag.bootstrap, tables: pgDiag.tables };
+  if (url.searchParams.get("storage") === "1") out.storage = await sbStorageUsage(env);
+  return json(out);
 }
 
 // ===== 云存储二进制后端（Supabase Storage 优先，D1 分片降级）=====
