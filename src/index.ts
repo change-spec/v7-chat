@@ -1751,9 +1751,29 @@ async function handleCloudBuy(request: Request, env: Env): Promise<Response> {
 async function handleCloudList(request: Request, env: Env): Promise<Response> {
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
+  // 展示型读优先走 PG 只读副本，减轻 D1 主库读压力；副本滞后/暂停时自动回退 D1
+  const mirror = await pgList(env, user.username);
+  if (mirror) {
+    // 一致性护栏：用 D1 的 COUNT（极轻）比对副本条数，不一致说明副本滞后 → 回退 D1 并后台自愈
+    const n = await countCloudFiles(env, user.username);
+    if (mirror.length === n) return json({ files: mirror, source: "pg" });
+    pgFire(pgResync(env, user.username));
+  }
   const { results } = await env.DB.prepare("SELECT id, name, size, mime, created_at FROM cloud_files WHERE owner = ? ORDER BY created_at DESC")
     .bind(user.username).all<{ id: string; name: string; size: number; mime: string | null; created_at: string }>();
-  return json({ files: results || [] });
+  return json({ files: results || [], source: "d1" });
+}
+
+// 运维自检：副本层状态（不含任何密钥 / 用户数据）
+// ?bootstrap=1 时额外尝试一次性自动建表，用于首次启用 / 故障排查
+async function handleCloudPgHealth(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const user = await authUser(request, env);
+  // 诊断细节（表结构 / 端点状态）仅登录用户可见，避免对外泄露内部信息
+  const ready = await pgEnsure(env, !!user && url.searchParams.get("bootstrap") === "1");
+  const base = { enabled: sbEnabled(env), ready, truth: "d1", mode: "read-replica+disaster-recovery" };
+  if (!user) return json(base);
+  return json({ ...base, table: PG_TABLE, probe: pgDiag.probe, bootstrap: pgDiag.bootstrap, tables: pgDiag.tables });
 }
 
 // ===== 云存储二进制后端（Supabase Storage 优先，D1 分片降级）=====
@@ -1775,6 +1795,163 @@ function sbHeaders(env: Env, extra?: Record<string, string>): Record<string, str
   };
   if (extra) for (const k in extra) h[k] = extra[k];
   return h;
+}
+
+// ===== Supabase Postgres 元数据副本（只读加速 + 跨云灾备）=====
+// 架构定位：D1 = 唯一真相源（truth），PG = 尽力而为的只读副本。
+//  · 正确性路径（配额强制 / 扣费 / 续费 / 到期收回）永远只查 D1，绝不受副本延迟影响
+//  · 展示型高频读（文件列表）优先 PG；未就绪 / 项目暂停 / 超时 / 条数不一致 → 自动回退 D1
+//  · 免费项目会自动暂停，故 PG 不可用属常态预期而非故障：请求失败即熔断 5 分钟，期间用户路径零网络开销
+//  · 副本允许短暂滞后：列表读用 D1 的 COUNT 做一致性护栏，不一致即回退并后台全量重同步（自愈/首次回填）
+//  · 用户路径直接发业务请求（成功即启用、失败即熔断），不额外探测；探测/建表仅由运维端点触发
+const PG_TABLE = "cloud_files_mirror";
+const PG_RECHECK_MS = 5 * 60 * 1000;
+let pgState = { ok: false, checkedAt: 0 };
+let pgDiag = { probe: "", bootstrap: "", tables: "" };
+
+function pgBase(env: Env): string { return (env.SUPABASE_URL || "").replace(/\/$/, ""); }
+function pgRef(env: Env): string {
+  const m = pgBase(env).match(/https?:\/\/([^.]+)\./);
+  return m ? m[1] : "";
+}
+async function pgFetch(
+  env: Env,
+  path: string,
+  init: { method: string; headers?: Record<string, string>; body?: string },
+  timeoutMs = 900
+): Promise<Response | null> {
+  if (!sbEnabled(env)) return null;
+  try {
+    return await fetch(pgBase(env) + "/rest/v1/" + path, {
+      method: init.method,
+      headers: sbHeaders(env, init.headers),
+      body: init.body,
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+  } catch { return null; }
+}
+
+// 仅由运维自检端点调用：探测副本表是否可用，可选尝试一次性自动建表。
+// 正常用户请求不经过此函数，避免 Management API 的 2.5s 拖慢在线接口。
+async function pgEnsure(env: Env, allowBootstrap = false): Promise<boolean> {
+  if (!sbEnabled(env)) return false;
+  if (pgState.ok) return true;
+  const now = Date.now();
+  // 运维端点（allowBootstrap）强制重新探测，绕过熔断以便诊断/首次启用
+  if (!allowBootstrap && now - pgState.checkedAt < PG_RECHECK_MS) return false;
+  pgState.checkedAt = now;
+  // 探测失败（表不存在 / 项目暂停）时 checkedAt 已记录 → 5 分钟熔断期内用户路径零额外开销
+  const probe = await pgFetch(env, PG_TABLE + "?select=id&limit=1", { method: "GET" }, 1200);
+  pgDiag.probe = probe ? "HTTP " + probe.status : "network-error";
+  if (probe && probe.ok) { pgState.ok = true; return true; }
+  if (!allowBootstrap) return false;
+  // 表不存在时，运维端点尝试多个可用的 SQL 执行通道做一次性自动建表（幂等）
+  const ref = pgRef(env);
+  if (!ref) return false;
+  const ddl = "CREATE TABLE IF NOT EXISTS public." + PG_TABLE + " ("
+    + "id text PRIMARY KEY, owner text NOT NULL, name text NOT NULL, "
+    + "size bigint NOT NULL DEFAULT 0, mime text, storage text, "
+    + "created_at timestamptz NOT NULL DEFAULT now(), synced_at timestamptz NOT NULL DEFAULT now());"
+    + "CREATE INDEX IF NOT EXISTS " + PG_TABLE + "_owner_idx ON public." + PG_TABLE + " (owner);";
+  const endpoints = [
+    pgBase(env) + "/pg/query",                                               // pg-meta（Studio SQL Editor 通道）
+    "https://api.supabase.com/v1/projects/" + ref + "/database/query",       // Management API（通常需 PAT）
+    pgBase(env) + "/rest/v1/rpc/exec_sql"                                    // 若项目预置了 exec_sql 函数
+  ];
+  const statuses: string[] = [];
+  for (const ep of endpoints) {
+    try {
+      const r = await fetch(ep, {
+        method: "POST",
+        headers: sbHeaders(env, { "Content-Type": "application/json", "Accept": "application/json" }),
+        body: JSON.stringify({ query: ddl }),
+        signal: AbortSignal.timeout(2500)
+      });
+      statuses.push(ep.includes("/pg/") ? "pgmeta:" + r.status
+        : ep.includes("api.supabase.com") ? "mgmt:" + r.status : "rpc:" + r.status);
+      if (r.ok) {
+        const probe2 = await pgFetch(env, PG_TABLE + "?select=id&limit=1", { method: "GET" }, 2000);
+        if (probe2 && probe2.ok) { pgState.ok = true; pgDiag.bootstrap = statuses.join(","); return true; }
+      }
+    } catch { statuses.push("network-error"); }
+  }
+  pgDiag.bootstrap = statuses.join(",");
+  // 附带探测 PostgREST 已暴露的表名（仅名称，不含数据），便于判断是否已有可复用的表
+  try {
+    const sw = await fetch(pgBase(env) + "/rest/v1/", {
+      headers: sbHeaders(env, { "Accept": "application/openapi+json" }),
+      signal: AbortSignal.timeout(2500)
+    });
+    if (sw.ok) {
+      const spec: any = await sw.json();
+      const defs = spec?.definitions || spec?.components?.schemas || {};
+      pgDiag.tables = Object.keys(defs).slice(0, 40).join(",");
+    } else pgDiag.tables = "swagger:HTTP " + sw.status;
+  } catch { pgDiag.tables = "swagger:network-error"; }
+  return false;
+}
+
+type PGRow = { id: string; owner: string; name: string; size: number; mime: string | null; storage: string | null; created_at: string };
+// 后台任务：有 ExecutionContext.waitUntil 时交给它（保证响应返回后仍执行完），否则静默 fire-and-forget
+let pgCtx: { waitUntil?: (p: Promise<unknown>) => void } | null = null;
+function pgFire(p: Promise<unknown>): void {
+  const safe = p.catch(() => {});
+  try { if (pgCtx && typeof pgCtx.waitUntil === "function") pgCtx.waitUntil(safe); } catch {}
+}
+// 熔断判定：已确认可用 → 放行；失败后 5 分钟内直接短路（用户路径零网络开销）
+function pgUsable(): boolean {
+  return pgState.ok || Date.now() - pgState.checkedAt >= PG_RECHECK_MS;
+}
+function pgFail(): void { pgState = { ok: false, checkedAt: Date.now() }; }
+function pgOk(): void { pgState = { ok: true, checkedAt: Date.now() }; }
+
+async function pgUpsert(env: Env, row: PGRow): Promise<void> {
+  if (!sbEnabled(env) || !pgUsable()) return;
+  const r = await pgFetch(env, PG_TABLE, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify([{ ...row, synced_at: new Date().toISOString() }])
+  });
+  if (r && r.ok) pgOk(); else pgFail();
+}
+async function pgDelete(env: Env, fileId: string): Promise<void> {
+  if (!sbEnabled(env) || !pgUsable()) return;
+  const r = await pgFetch(env, PG_TABLE + "?id=eq." + encodeURIComponent(fileId), { method: "DELETE" });
+  if (r && r.ok) pgOk(); else pgFail();
+}
+async function pgDeleteOwner(env: Env, owner: string): Promise<void> {
+  if (!sbEnabled(env) || !pgUsable()) return;
+  const r = await pgFetch(env, PG_TABLE + "?owner=eq." + encodeURIComponent(owner), { method: "DELETE" });
+  if (r && r.ok) pgOk(); else pgFail();
+}
+async function pgList(env: Env, owner: string): Promise<any[] | null> {
+  if (!sbEnabled(env) || !pgUsable()) return null;
+  const r = await pgFetch(env,
+    PG_TABLE + "?owner=eq." + encodeURIComponent(owner) + "&select=id,name,size,mime,created_at&order=created_at.desc",
+    { method: "GET" }, 1200);
+  if (!r || !r.ok) { pgFail(); return null; }
+  pgOk();
+  try { return await r.json<any[]>(); } catch { return null; }
+}
+// 从 D1 全量重同步某用户的副本（自愈 / 首次启用时回填）
+async function pgResync(env: Env, owner: string): Promise<void> {
+  if (!pgState.ok) return;
+  const { results } = await env.DB.prepare(
+    "SELECT id, owner, name, size, mime, storage, created_at FROM cloud_files WHERE owner = ?"
+  ).bind(owner).all<PGRow>();
+  const rows = (results || []).map((r) => ({ ...r, synced_at: new Date().toISOString() }));
+  // 先清掉该用户残留的旧行（避免「副本多出已删文件」导致护栏永远不一致），再全量写入
+  const cleared = await pgFetch(env, PG_TABLE + "?owner=eq." + encodeURIComponent(owner), { method: "DELETE" }, 2000);
+  if (!cleared || !cleared.ok) { pgFail(); return; }
+  if (!rows.length) return;
+  for (let i = 0; i < rows.length; i += 200) {
+    const r = await pgFetch(env, PG_TABLE, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify(rows.slice(i, i + 200))
+    }, 2000);
+    if (!r || !r.ok) { pgFail(); return; }
+  }
 }
 
 // 9 个 D1 分片库，按文件 id 哈希分散；未绑定时回退主库（保证兼容）
@@ -1922,6 +2099,7 @@ async function handleCloudDelete(request: Request, env: Env): Promise<Response> 
   if (!f) return json({ error: "文件不存在" }, 404);
   await deleteCloudBytes(env, id, f.storage);
   await env.DB.prepare("DELETE FROM cloud_files WHERE id = ? AND owner = ?").bind(id, user.username).run();
+  pgFire(pgDelete(env, id));
   const used = await sumCloudUsed(env, user.username);
   await env.DB.prepare("UPDATE cloud_subs SET used_mb = ? WHERE username = ?").bind(used / (1024 * 1024), user.username).run();
   return json({ ok: true, ...(await cloudStatus(env, user)) });
@@ -1941,6 +2119,7 @@ async function handleCloudUnsub(request: Request, env: Env): Promise<Response> {
     const { results: all } = await env.DB.prepare("SELECT id, storage FROM cloud_files WHERE owner = ?").bind(user.username).all<{ id: string; storage: string | null }>();
     for (const f of (all || [])) await deleteCloudBytes(env, f.id, f.storage);
     await env.DB.prepare("DELETE FROM cloud_files WHERE owner = ?").bind(user.username).run();
+    pgFire(pgDeleteOwner(env, user.username));
     await env.DB.prepare("DELETE FROM cloud_subs WHERE username = ?").bind(user.username).run();
     return json({ ok: true, unsubbed: "all", ...(await cloudStatus(env, user)) });
   }
@@ -1948,12 +2127,15 @@ async function handleCloudUnsub(request: Request, env: Env): Promise<Response> {
   let toFree = removeMb * 1024 * 1024;
   const { results } = await env.DB.prepare("SELECT id, size, storage FROM cloud_files WHERE owner = ? ORDER BY created_at ASC")
     .bind(user.username).all<{ id: string; size: number; storage: string | null }>();
+  const removedIds: string[] = [];
   for (const f of (results || [])) {
     if (toFree <= 0) break;
     await deleteCloudBytes(env, f.id, f.storage);
     await env.DB.prepare("DELETE FROM cloud_files WHERE id = ? AND owner = ?").bind(f.id, user.username).run();
+    removedIds.push(f.id);
     toFree -= f.size;
   }
+  if (removedIds.length) pgFire(Promise.all(removedIds.map((fid) => pgDelete(env, fid))));
   const newTotal = Math.max(0, sub.total_mb - removeMb);
   await env.DB.prepare("UPDATE cloud_subs SET total_mb = ?, used_mb = (SELECT COALESCE(SUM(size),0)/(1024*1024) FROM cloud_files WHERE owner = ?) WHERE username = ?")
     .bind(newTotal, user.username, user.username).run();
@@ -1970,6 +2152,7 @@ async function handleCloudPurge(request: Request, env: Env): Promise<Response> {
     await deleteCloudBytes(env, row.id, row.storage);
   }
   await env.DB.prepare("DELETE FROM cloud_files WHERE owner = ?").bind(user.username).run();
+  pgFire(pgDeleteOwner(env, user.username));
   await env.DB.prepare("DELETE FROM cloud_subs WHERE username = ?").bind(user.username).run();
   return json({ ok: true });
 }
@@ -2004,6 +2187,7 @@ async function handleCloudUpload(request: Request, env: Env): Promise<Response> 
   const storage = await storeCloudBytes(env, id, new Uint8Array(buf), mime, forceD1);
   await env.DB.prepare("INSERT INTO cloud_files (id, owner, name, size, mime, data, storage, created_at) VALUES (?, ?, ?, ?, ?, '', ?, ?)")
     .bind(id, user.username, name, size, mime, storage, now).run();
+  pgFire(pgUpsert(env, { id, owner: user.username, name, size, mime, storage, created_at: now }));
   await env.DB.prepare("UPDATE cloud_subs SET used_mb = ? WHERE username = ?").bind((used + size) / (1024 * 1024), user.username).run();
   return json({ ok: true, ...(await cloudStatus(env, user)) });
 }
@@ -2340,13 +2524,16 @@ async function handleCloudReclaimDone(request: Request, env: Env): Promise<Respo
   let body: { downloadedIds?: string[] };
   try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
   const ids = Array.isArray(body.downloadedIds) ? body.downloadedIds.slice(0, 500) : [];
+  const reclaimedIds: string[] = [];
   for (const id of ids) {
     const f = await env.DB.prepare("SELECT id, storage FROM cloud_files WHERE id = ? AND owner = ?").bind(id, user.username).first<any>();
     if (f) {
       await deleteCloudBytes(env, f.id, f.storage);
       await env.DB.prepare("DELETE FROM cloud_files WHERE id = ?").bind(f.id).run();
+      reclaimedIds.push(f.id);
     }
   }
+  if (reclaimedIds.length) pgFire(Promise.all(reclaimedIds.map((fid) => pgDelete(env, fid))));
   const rest = await env.DB.prepare("SELECT COUNT(*) AS n FROM cloud_files WHERE owner = ?").bind(user.username).first<{ n: number }>();
   const remaining = rest ? rest.n : 0;
   if (remaining === 0) {
@@ -2587,8 +2774,10 @@ async function handleMarketBuy(request: Request, env: Env): Promise<Response> {
       const buyerUsed = await sumCloudUsed(env, user.username);
       const buyerForceD1 = buyerIsRA && buyerUsed >= 1024 * 1024 * 1024;
       const cStorage = await storeCloudBytes(env, deliveredId, bytes, item.mime || "application/octet-stream", buyerForceD1);
+      const deliveredAt = new Date().toISOString();
       await env.DB.prepare("INSERT INTO cloud_files (id, owner, name, size, mime, data, storage, created_at) VALUES (?, ?, ?, ?, ?, '', ?, ?)")
-        .bind(deliveredId, user.username, item.name, item.size, item.mime, cStorage, new Date().toISOString()).run();
+        .bind(deliveredId, user.username, item.name, item.size, item.mime, cStorage, deliveredAt).run();
+      pgFire(pgUpsert(env, { id: deliveredId, owner: user.username, name: item.name, size: item.size, mime: item.mime, storage: cStorage, created_at: deliveredAt }));
       await env.DB.prepare("UPDATE cloud_subs SET used_mb = used_mb + ? WHERE username = ?")
         .bind(item.size / (1024 * 1024), user.username).run();
     } catch (e) {
@@ -2902,7 +3091,8 @@ async function handleGameState(request: Request, env: Env): Promise<Response> {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx?: { waitUntil?: (p: Promise<unknown>) => void }): Promise<Response> {
+    pgCtx = ctx || null;
     const url = new URL(request.url);
 
     if (url.pathname === "/" && request.method === "GET") {
@@ -2973,6 +3163,7 @@ export default {
     if (url.pathname === "/api/cloud/repost" && request.method === "POST") return handleCloudRepost(request, env);
     if (url.pathname === "/api/cloud/renew" && request.method === "POST") return handleCloudRenew(request, env);
     if (url.pathname === "/api/cloud/reclaim-done" && request.method === "POST") return handleCloudReclaimDone(request, env);
+    if (url.pathname === "/api/cloud/pg-health" && request.method === "GET") return handleCloudPgHealth(request, env);
     // 云空间 7 天试用活动（独立空间）
     if (url.pathname === "/api/cloud/trial/status" && request.method === "GET") return handleTrialStatus(request, env);
     if (url.pathname === "/api/cloud/trial/claim" && request.method === "POST") return handleTrialClaim(request, env);
