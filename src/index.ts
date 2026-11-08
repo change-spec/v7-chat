@@ -8,6 +8,16 @@ export interface Env {
   SUPABASE_URL?: string;
   SUPABASE_SECRET?: string;
   SUPABASE_BUCKET?: string;
+  // 9 个 D1 分片库（v7-chat-db-02..10）：云文件 D1 分片存储（RA 超 1GB 溢出层 / Supabase 失败兜底）
+  SHARD0?: D1Database;
+  SHARD1?: D1Database;
+  SHARD2?: D1Database;
+  SHARD3?: D1Database;
+  SHARD4?: D1Database;
+  SHARD5?: D1Database;
+  SHARD6?: D1Database;
+  SHARD7?: D1Database;
+  SHARD8?: D1Database;
 }
 
 const PBKDF2_ITERATIONS = 100000;
@@ -1767,10 +1777,34 @@ function sbHeaders(env: Env, extra?: Record<string, string>): Record<string, str
   return h;
 }
 
-// 写入云文件二进制：优先 Supabase，失败则降级为 D1 分片
-// 返回实际使用的后端标识（"supabase" | "d1"）
-async function storeCloudBytes(env: Env, fileId: string, bytes: Uint8Array, mime: string): Promise<string> {
-  if (sbEnabled(env)) {
+// 9 个 D1 分片库，按文件 id 哈希分散；未绑定时回退主库（保证兼容）
+const SHARD_COUNT = 9;
+function pickShard(fileId: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < fileId.length; i++) { h ^= fileId.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return (h >>> 0) % SHARD_COUNT;
+}
+function shardDB(env: Env, idx: number): D1Database {
+  const map = [env.SHARD0, env.SHARD1, env.SHARD2, env.SHARD3, env.SHARD4, env.SHARD5, env.SHARD6, env.SHARD7, env.SHARD8];
+  return (idx >= 0 && idx < map.length && map[idx]) ? map[idx]! : env.DB;
+}
+
+// 分片库表结构自愈：首次写入某分片前确保 cloud_file_chunks 存在（幂等，按 isolate 缓存）
+const ensuredShards = new Set<number>();
+async function ensureShardSchema(env: Env, idx: number): Promise<void> {
+  if (ensuredShards.has(idx)) return;
+  const db = shardDB(env, idx);
+  if (db === env.DB) { ensuredShards.add(idx); return; } // 主库由 ensureSchema 维护
+  await db.prepare(
+    "CREATE TABLE IF NOT EXISTS cloud_file_chunks (file_id TEXT NOT NULL, seq INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (file_id, seq))"
+  ).run();
+  ensuredShards.add(idx);
+}
+
+// 写入云文件二进制：优先 Supabase，失败或强制(forceD1)时降级为 D1 分片（散到 9 个分片库）
+// 返回实际使用的后端标识："supabase" | "d1:N"（N=分片库序号）；历史格式 "d1" 表示主库兜底（兼容旧数据）
+async function storeCloudBytes(env: Env, fileId: string, bytes: Uint8Array, mime: string, forceD1?: boolean): Promise<string> {
+  if (!forceD1 && sbEnabled(env)) {
     try {
       const url = env.SUPABASE_URL + "/storage/v1/object/" + sbBucket(env) + "/" + sbObjectPath(fileId);
       const res = await fetch(url, {
@@ -1779,21 +1813,24 @@ async function storeCloudBytes(env: Env, fileId: string, bytes: Uint8Array, mime
         body: bytes as unknown as BodyInit
       });
       if (res.ok) return "supabase";
-      console.error("Supabase 上传失败，降级到 D1：", res.status, (await res.text()).slice(0, 200));
+      console.error("Supabase 上传失败，降级到 D1 分片：", res.status, (await res.text()).slice(0, 200));
     } catch (e) {
-      console.error("Supabase 上传异常，降级到 D1：", e);
+      console.error("Supabase 上传异常，降级到 D1 分片：", e);
     }
   }
-  // 降级：D1 分片存储（每片 ~60KB base64，避免单格超限）
+  // D1 分片存储（每片 ~60KB base64，避免单格超限）；按文件 id 哈希分散到 9 个分片库
+  const shard = pickShard(fileId);
+  await ensureShardSchema(env, shard);
+  const db = shardDB(env, shard);
   const b64 = bytesToBase64(bytes);
   const CH = 60000;
   const inserts: any[] = [];
   for (let i = 0, seq = 1; i < b64.length; i += CH, seq++) {
-    inserts.push(env.DB.prepare("INSERT INTO cloud_file_chunks (file_id, seq, data) VALUES (?, ?, ?)").bind(fileId, seq, b64.slice(i, i + CH)));
-    if (inserts.length >= 100) { await env.DB.batch(inserts); inserts.length = 0; }
+    inserts.push(db.prepare("INSERT INTO cloud_file_chunks (file_id, seq, data) VALUES (?, ?, ?)").bind(fileId, seq, b64.slice(i, i + CH)));
+    if (inserts.length >= 50) { await db.batch(inserts); inserts.length = 0; }
   }
-  if (inserts.length) await env.DB.batch(inserts);
-  return "d1";
+  if (inserts.length) await db.batch(inserts);
+  return "d1:" + shard;
 }
 
 // 读取云文件二进制（返回原始字节），按 storage 字段路由
@@ -1809,13 +1846,20 @@ async function loadCloudBytes(env: Env, fileId: string, storage: string | null):
       return null;
     }
   }
-  const { results } = await env.DB.prepare("SELECT data FROM cloud_file_chunks WHERE file_id = ? ORDER BY seq ASC").bind(fileId).all<{ data: string }>();
+  // D1 分片：storage 形如 "d1:N" 表示从第 N 个分片库读；历史 "d1" 走主库（兼容旧数据）
+  let db = env.DB;
+  if (storage && storage.startsWith("d1:")) {
+    const s = parseInt(storage.split(":")[1], 10);
+    if (!isNaN(s)) db = shardDB(env, s);
+  }
+  const { results } = await db.prepare("SELECT data FROM cloud_file_chunks WHERE file_id = ? ORDER BY seq ASC").bind(fileId).all<{ data: string }>();
   const b64 = (results || []).map((r) => r.data).join("");
   if (!b64) return null;
   return base64ToBytes(b64);
 }
 
 // 删除云文件二进制
+// 删除云文件二进制（按 storage 路由到正确的后端 / 分片库）
 async function deleteCloudBytes(env: Env, fileId: string, storage: string | null): Promise<void> {
   if (storage === "supabase" && sbEnabled(env)) {
     try {
@@ -1825,7 +1869,13 @@ async function deleteCloudBytes(env: Env, fileId: string, storage: string | null
       console.error("Supabase 删除失败：", e);
     }
   }
-  await env.DB.prepare("DELETE FROM cloud_file_chunks WHERE file_id = ?").bind(fileId).run();
+  // D1 分片：storage 形如 "d1:N" 表示从第 N 个分片库删；历史 "d1" 走主库（兼容旧数据）
+  let db = env.DB;
+  if (storage && storage.startsWith("d1:")) {
+    const s = parseInt(storage.split(":")[1], 10);
+    if (!isNaN(s)) db = shardDB(env, s);
+  }
+  await db.prepare("DELETE FROM cloud_file_chunks WHERE file_id = ?").bind(fileId).run();
 }
 
 async function handleCloudFile(request: Request, env: Env): Promise<Response> {
@@ -1888,18 +1938,19 @@ async function handleCloudUnsub(request: Request, env: Env): Promise<Response> {
   const removeMb = Math.floor(Number(body.mb) || 0);
   const fullUnsub = removeMb <= 0 || removeMb >= sub.total_mb;
   if (fullUnsub) {
-    await env.DB.prepare("DELETE FROM cloud_file_chunks WHERE file_id IN (SELECT id FROM cloud_files WHERE owner = ?)").bind(user.username).run();
+    const { results: all } = await env.DB.prepare("SELECT id, storage FROM cloud_files WHERE owner = ?").bind(user.username).all<{ id: string; storage: string | null }>();
+    for (const f of (all || [])) await deleteCloudBytes(env, f.id, f.storage);
     await env.DB.prepare("DELETE FROM cloud_files WHERE owner = ?").bind(user.username).run();
     await env.DB.prepare("DELETE FROM cloud_subs WHERE username = ?").bind(user.username).run();
     return json({ ok: true, unsubbed: "all", ...(await cloudStatus(env, user)) });
   }
   // 按 MB 退订：从最旧文件开始删，释放 >= removeMb MB
   let toFree = removeMb * 1024 * 1024;
-  const { results } = await env.DB.prepare("SELECT id, size FROM cloud_files WHERE owner = ? ORDER BY created_at ASC")
-    .bind(user.username).all<{ id: string; size: number }>();
+  const { results } = await env.DB.prepare("SELECT id, size, storage FROM cloud_files WHERE owner = ? ORDER BY created_at ASC")
+    .bind(user.username).all<{ id: string; size: number; storage: string | null }>();
   for (const f of (results || [])) {
     if (toFree <= 0) break;
-    await env.DB.prepare("DELETE FROM cloud_file_chunks WHERE file_id = ?").bind(f.id).run();
+    await deleteCloudBytes(env, f.id, f.storage);
     await env.DB.prepare("DELETE FROM cloud_files WHERE id = ? AND owner = ?").bind(f.id, user.username).run();
     toFree -= f.size;
   }
@@ -1949,7 +2000,8 @@ async function handleCloudUpload(request: Request, env: Env): Promise<Response> 
   // 二进制优先落 Supabase Storage（不占 D1）；失败则降级为 D1 分片
   const id = "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const now = new Date().toISOString();
-  const storage = await storeCloudBytes(env, id, new Uint8Array(buf), mime);
+  const forceD1 = isRA && used >= 1024 * 1024 * 1024; // RA 已用超 1GB → 溢出到 D1 分片
+  const storage = await storeCloudBytes(env, id, new Uint8Array(buf), mime, forceD1);
   await env.DB.prepare("INSERT INTO cloud_files (id, owner, name, size, mime, data, storage, created_at) VALUES (?, ?, ?, ?, ?, '', ?, ?)")
     .bind(id, user.username, name, size, mime, storage, now).run();
   await env.DB.prepare("UPDATE cloud_subs SET used_mb = ? WHERE username = ?").bind((used + size) / (1024 * 1024), user.username).run();
@@ -2291,13 +2343,7 @@ async function handleCloudReclaimDone(request: Request, env: Env): Promise<Respo
   for (const id of ids) {
     const f = await env.DB.prepare("SELECT id, storage FROM cloud_files WHERE id = ? AND owner = ?").bind(id, user.username).first<any>();
     if (f) {
-      if (f.storage === "supabase" && sbEnabled(env)) {
-        try {
-          const url = env.SUPABASE_URL + "/storage/v1/object/" + sbBucket(env) + "/" + sbObjectPath(f.id);
-          await fetch(url, { method: "DELETE", headers: sbHeaders(env) });
-        } catch (e) { console.error("主空间文件删除失败：", e); }
-      }
-      await env.DB.prepare("DELETE FROM cloud_file_chunks WHERE file_id = ?").bind(f.id).run();
+      await deleteCloudBytes(env, f.id, f.storage);
       await env.DB.prepare("DELETE FROM cloud_files WHERE id = ?").bind(f.id).run();
     }
   }
@@ -2537,7 +2583,10 @@ async function handleMarketBuy(request: Request, env: Env): Promise<Response> {
   if (deliver === "cloud" && bytes) {
     try {
       deliveredId = "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-      const cStorage = await storeCloudBytes(env, deliveredId, bytes, item.mime || "application/octet-stream");
+      const buyerIsRA = user.role === "root-admin";
+      const buyerUsed = await sumCloudUsed(env, user.username);
+      const buyerForceD1 = buyerIsRA && buyerUsed >= 1024 * 1024 * 1024;
+      const cStorage = await storeCloudBytes(env, deliveredId, bytes, item.mime || "application/octet-stream", buyerForceD1);
       await env.DB.prepare("INSERT INTO cloud_files (id, owner, name, size, mime, data, storage, created_at) VALUES (?, ?, ?, ?, ?, '', ?, ?)")
         .bind(deliveredId, user.username, item.name, item.size, item.mime, cStorage, new Date().toISOString()).run();
       await env.DB.prepare("UPDATE cloud_subs SET used_mb = used_mb + ? WHERE username = ?")

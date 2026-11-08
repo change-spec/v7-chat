@@ -14,3 +14,41 @@ script_name = "cloud-chat-do"
 binding = "DB"
 database_name = "v7-chat-db"
 database_id = "ca1f7479-5c41-4a1e-8ae4-836617d277d5"
+
+# 9 个 D1 分片库（v7-chat-db-02..10）：云文件 D1 分片存储（RA 超 1GB 溢出层 / Supabase 失败兜底）
+[[d1_databases]]
+binding = "SHARD0"
+database_name = "v7-chat-db-02"
+database_id = "3c670f1d-3cb8-43e1-95b5-e3d92493373e"
+[[d1_databases]]
+binding = "SHARD1"
+database_name = "v7-chat-db-03"
+database_id = "b2915348-4c06-4095-9777-84fc23b3abde"
+[[d1_databases]]
+binding = "SHARD2"
+database_name = "v7-chat-db-04"
+database_id = "b49bda7d-2e32-405f-885c-8774c9fa3c0b"
+[[d1_databases]]
+binding = "SHARD3"
+database_name = "v7-chat-db-05"
+database_id = "46facd30-6cc4-4ec1-99bb-a3dade1632cf"
+[[d1_databases]]
+binding = "SHARD4"
+database_name = "v7-chat-db-06"
+database_id = "4e8e47da-27f7-49ba-a555-d32550b7e1d5"
+[[d1_databases]]
+binding = "SHARD5"
+database_name = "v7-chat-db-07"
+database_id = "54fd6b7a-1a64-453e-9bc8-dbab428531c2"
+[[d1_databases]]
+binding = "SHARD6"
+database_name = "v7-chat-db-08"
+database_id = "14b00f00-1e15-4a4b-9d35-d078a0646ffc"
+[[d1_databases]]
+binding = "SHARD7"
+database_name = "v7-chat-db-09"
+database_id = "d2392fa3-9b3c-4f07-bcc7-de5fa2501147"
+[[d1_databases]]
+binding = "SHARD8"
+database_name = "v7-chat-db-10"
+database_id = "d7ea19dc-ae7a-429d-b75d-f65ceb0008be"
