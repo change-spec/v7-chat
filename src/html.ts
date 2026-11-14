@@ -551,16 +551,16 @@ export const html = `<!DOCTYPE html>
       <button class="btn magenta" id="tabRegister">注册</button>
     </div>
 
-    <!-- 登录：用户名 + 密码 -->
+    <!-- 登录：username + password -->
     <div id="loginView">
       <div class="field">
-        <label>用户名（2-16 位字母数字）</label>
-        <input id="authUser" maxlength="16" placeholder="用户名" autocomplete="username">
+        <label>username</label>
+        <input id="authUser" maxlength="16" autocomplete="username">
       </div>
       <div class="field">
-        <label>密码（至少 6 位）</label>
+        <label>password</label>
         <div class="pw-wrap">
-          <input id="authPass" type="password" maxlength="64" placeholder="••••••" autocomplete="current-password">
+          <input id="authPass" type="password" maxlength="64" autocomplete="current-password">
           <button type="button" class="pw-eye" id="eyeAuth" aria-label="显示或隐藏密码"></button>
         </div>
       </div>
@@ -588,12 +588,12 @@ export const html = `<!DOCTYPE html>
       <div id="regStep2" class="hidden">
         <div class="hint" id="regVerifiedInfo" style="text-align:left;margin:0 0 10px">凭据有效 · 请设置用户名和密码，完成后账户才算创建</div>
         <div class="field">
-          <label>用户名（2-16 位字母数字）</label>
-          <input id="regUser" maxlength="16" placeholder="给自己起个用户名">
+          <label>username</label>
+          <input id="regUser" maxlength="16">
         </div>
         <div class="field">
-          <label>密码（至少 6 位）</label>
-          <input id="regPass" type="password" maxlength="64" placeholder="设置密码">
+          <label>password</label>
+          <input id="regPass" type="password" maxlength="64">
         </div>
         <button class="btn wide" id="regFinishBtn">▸ 完成注册</button>
         <button class="btn wide magenta" id="regBackBtn" style="margin-top:8px">← 返回重新填凭据</button>
@@ -720,7 +720,6 @@ export const html = `<!DOCTYPE html>
       </div>
       <button class="btn wide" id="btnDoRedeem">▸ 兑换</button>
       <div class="err" id="redeemErr"></div>
-      <div class="hint">也可以直接使用兑换面板输入兑换码</div>
       <div class="tool-row"><button class="btn small magenta" id="btnRedeemBack">▸ 返回聊天</button></div>
     </div>
 
@@ -744,9 +743,9 @@ export const html = `<!DOCTYPE html>
         </div>
       </div>
       <div class="field hidden" id="joinRoomBox" style="margin-top:14px">
-        <label>房间号（6 位 · 已购房间号仍可加入）</label>
+        <label>房间号</label>
         <div style="display:flex;gap:10px">
-          <input id="joinRoomInput" maxlength="6" placeholder="房间号" style="text-transform:uppercase;letter-spacing:3px;text-align:center">
+          <input id="joinRoomInput" maxlength="6" style="text-transform:uppercase;letter-spacing:3px;text-align:center">
           <button class="btn" id="btnJoinRoom" style="flex-shrink:0">▸ 加入</button>
         </div>
       </div>
@@ -959,8 +958,8 @@ export const html = `<!DOCTYPE html>
           <div class="field">
             <label>identity</label>
             <select id="inviteIdentity">
-              <option value="observer">Observer（只能围观，不能发言）</option>
-              <option value="member" selected>User（普通成员）</option>
+              <option value="observer">Observer</option>
+              <option value="member" selected>User</option>
             </select>
           </div>
           <button class="btn wide" id="btnCreateAcc">▸ 创建</button>
