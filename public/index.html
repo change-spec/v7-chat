@@ -69,6 +69,45 @@
   .auth-screen.hidden { display: none; }
   .auth-card { width: 100%; max-width: 420px; }
 
+  /* ===== 欢迎首页 ===== */
+  #welcomeView {
+    display: flex; flex-direction: column; align-items: center;
+    min-height: 340px; padding: 8px 0 4px;
+  }
+  #welcomeView.hidden { display: none; }
+  .welcome-title {
+    margin: 26px 0 0; text-align: center; line-height: 1.35;
+    font-size: clamp(25px, 6vw, 36px); font-weight: 700; letter-spacing: 1px;
+    max-width: 100%; word-break: normal;
+  }
+  .welcome-title .w1 { color: var(--cyan); text-shadow: 0 0 14px rgba(0,240,255,.65); }
+  .welcome-title .w2 { color: var(--magenta); text-shadow: 0 0 14px rgba(255,46,151,.65); }
+  .welcome-title .w3 { color: var(--amber); text-shadow: 0 0 14px rgba(255,184,0,.65); }
+  .welcome-title .w4 { color: var(--green); text-shadow: 0 0 14px rgba(0,255,150,.55); }
+  .welcome-actions {
+    margin-top: auto; padding-top: 48px;
+    display: flex; gap: 14px; justify-content: center; width: 100%;
+  }
+  .welcome-actions .btn {
+    flex: 1; max-width: 190px; padding: 16px 10px;
+    font-size: 15px; font-weight: 700; letter-spacing: 2px;
+  }
+  .welcome-actions .btn.signin {
+    color: var(--amber); border-color: rgba(255,184,0,.65);
+    background: rgba(255,184,0,.06); --glow: 255,184,0;
+  }
+  .welcome-actions .btn.signin:hover { background: rgba(255,184,0,.16); }
+  .welcome-actions .btn.signup {
+    color: var(--magenta); border-color: rgba(255,46,151,.65);
+    background: rgba(255,46,151,.06); --glow: 255,46,151;
+  }
+  .welcome-actions .btn.signup:hover { background: rgba(255,46,151,.16); }
+  .auth-back { display: block; width: 100%; margin-top: 10px; }
+  @media (max-width: 380px) {
+    .welcome-actions { gap: 8px; }
+    .welcome-actions .btn { font-size: 13px; letter-spacing: 1px; }
+  }
+
   .sidebar {
     width: 264px; flex-shrink: 0; border-right: 1px solid var(--line);
     background: rgba(13,13,22,.6); display: flex; flex-direction: column; gap: 14px;
@@ -286,8 +325,6 @@
   }
   .modal-box .modal-title { font-size: 15px; color: var(--cyan); font-weight: 700; margin-bottom: 12px; }
   .modal-box p { font-size: 12.5px; color: var(--text); margin-bottom: 16px; }
-  .switch-row { display: flex; gap: 10px; margin-bottom: 16px; }
-  .switch-row .btn { flex: 1; }
   .err { font-size: 11.5px; color: var(--magenta); margin-top: 10px; min-height: 18px; }
   select {
     font-family: inherit; font-size: 13px; background: rgba(0,240,255,.05); color: var(--text);
@@ -546,26 +583,34 @@
 <!-- 登录屏 -->
 <div class="auth-screen" id="authScreen">
   <div class="panel auth-card" id="authPanel">
-    <div class="switch-row">
-      <button class="btn" id="tabLogin">登录</button>
-      <button class="btn magenta" id="tabRegister">注册</button>
+    <!-- 欢迎首页：默认展示 -->
+    <div id="welcomeView">
+      <h1 class="welcome-title">
+        <span class="w1">Welcome</span> <span class="w2">to</span><br>
+        <span class="w3">Geek</span> <span class="w4">Chat</span> <span class="w1">Room</span>
+      </h1>
+      <div class="welcome-actions">
+        <button class="btn signin" id="welcomeSignIn">Sign-in</button>
+        <button class="btn signup" id="welcomeSignUp">Sign-up</button>
+      </div>
     </div>
 
     <!-- 登录：username + password -->
-    <div id="loginView">
+    <div id="loginView" class="hidden">
       <div class="field">
         <label>username</label>
-        <input id="authUser" maxlength="16" autocomplete="username">
+        <input id="authUser" maxlength="16" autocomplete="off">
       </div>
       <div class="field">
         <label>password</label>
         <div class="pw-wrap">
-          <input id="authPass" type="password" maxlength="64" autocomplete="current-password">
+          <input id="authPass" type="password" maxlength="64" autocomplete="off">
           <button type="button" class="pw-eye" id="eyeAuth" aria-label="显示或隐藏密码"></button>
         </div>
       </div>
       <button class="btn wide" id="authSubmit">▸ 登录</button>
       <button class="btn wide magenta" id="btnForgotPwd" style="margin-top:8px">忘记密码？用找回代码重置</button>
+      <button class="btn wide btn-back auth-back" id="btnLoginHome">← 返回首页</button>
     </div>
 
     <!-- 注册：先验证三项凭据，再自设用户名密码 -->
@@ -584,6 +629,7 @@
           <input id="regCode" maxlength="64">
         </div>
         <button class="btn wide" id="regVerifyBtn">▸ 验证凭据</button>
+        <button class="btn wide btn-back auth-back" id="btnRegHome">← 返回首页</button>
       </div>
       <div id="regStep2" class="hidden">
         <div class="hint" id="regVerifiedInfo" style="text-align:left;margin:0 0 10px">凭据有效 · 请设置用户名和密码，完成后账户才算创建</div>
@@ -601,25 +647,25 @@
     </div>
     <!-- 找回密码（未登录可用）-->
     <div id="recoverView" class="hidden">
-      <div class="hint" style="text-align:left;margin:0 0 10px">输入 Admin / Root-Admin 派发的找回代码，设置新密码。</div>
       <div class="field">
         <label>找回代码</label>
-        <input id="authRecCode" maxlength="64" placeholder="粘贴找回代码">
+        <input id="authRecCode" maxlength="64">
       </div>
       <div class="field">
         <label>用户名</label>
-        <input id="authRecUser" maxlength="16" placeholder="你的用户名">
+        <input id="authRecUser" maxlength="16">
       </div>
       <div class="field">
         <label>新密码（至少 6 位）</label>
-        <input id="authRecNew" type="password" maxlength="64" placeholder="新密码">
+        <input id="authRecNew" type="password" maxlength="64">
       </div>
       <div class="field">
         <label>确认新密码</label>
-        <input id="authRecNew2" type="password" maxlength="64" placeholder="再输一遍新密码">
+        <input id="authRecNew2" type="password" maxlength="64">
       </div>
       <button class="btn wide" id="btnAuthRecover">▸ 重置密码</button>
       <button class="btn wide magenta" id="btnRecBack" style="margin-top:8px">← 返回登录</button>
+      <button class="btn wide btn-back auth-back" id="btnRecHome">← 返回首页</button>
     </div>
 
     <div class="err" id="authErr"></div>
@@ -1371,8 +1417,7 @@
   var authUser = document.getElementById('authUser');
   var authPass = document.getElementById('authPass');
   var authSubmit = document.getElementById('authSubmit');
-  var tabLogin = document.getElementById('tabLogin');
-  var tabRegister = document.getElementById('tabRegister');
+  var welcomeView = document.getElementById('welcomeView');
   var messages = document.getElementById('messages');
   var msgInput = document.getElementById('msgInput');
   var connBadge = document.getElementById('connBadge');
@@ -1441,22 +1486,53 @@
     btnFile.title = '发送文件（≤' + fmtSize(MAX_FILE) + '）' + (charged ? ' · 上传 1MB/20Credits' : '');
   }
 
+  // 认证区所有输入框：切换视图 / 认证完成 / 退出登录时一律清空，避免账号密码与找回代码残留
+  var AUTH_INPUT_IDS = [
+    'authUser', 'authPass',
+    'authRecCode', 'authRecUser', 'authRecNew', 'authRecNew2',
+    'regBelongs', 'regIdentity', 'regCode', 'regUser', 'regPass'
+  ];
+  function clearAuthInputs() {
+    AUTH_INPUT_IDS.forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.value = '';
+    });
+  }
+  // 浏览器密码管理器可能在页面加载/视图切换后异步回填，延时再清一次；
+  // 用户已开始输入时跳过，避免把正在打的字清掉。
+  function clearAuthInputsSoon() {
+    setTimeout(function () {
+      var a = document.activeElement;
+      if (a && AUTH_INPUT_IDS.indexOf(a.id) !== -1) return;
+      clearAuthInputs();
+    }, 500);
+  }
+  function showAuthView(next) {
+    welcomeView.classList.toggle('hidden', next !== 'welcome');
+    document.getElementById('loginView').classList.toggle('hidden', next !== 'login');
+    document.getElementById('registerView').classList.toggle('hidden', next !== 'register');
+    document.getElementById('recoverView').classList.toggle('hidden', next !== 'recover');
+  }
   function setMode(next) {
     mode = next;
-    var isLogin = next === 'login';
-    document.getElementById('recoverView').classList.add('hidden');
-    document.getElementById('loginView').classList.toggle('hidden', !isLogin);
-    document.getElementById('registerView').classList.toggle('hidden', isLogin);
+    showAuthView(next);
     authErr.textContent = '';
-    // 切回登录时清掉注册态，避免残留凭据
-    if (isLogin) {
-      regVerified = null;
-      document.getElementById('regStep1').classList.remove('hidden');
-      document.getElementById('regStep2').classList.add('hidden');
-    }
+    authErr.style.color = '';
+    clearAuthInputs();
+    regVerified = null;
+    document.getElementById('regStep1').classList.remove('hidden');
+    document.getElementById('regStep2').classList.add('hidden');
   }
-  tabLogin.addEventListener('click', function () { setMode('login'); });
-  tabRegister.addEventListener('click', function () { setMode('register'); });
+  // 欢迎页入口
+  document.getElementById('welcomeSignIn').addEventListener('click', function () { setMode('login'); });
+  document.getElementById('welcomeSignUp').addEventListener('click', function () { setMode('register'); });
+  document.getElementById('btnLoginHome').addEventListener('click', function () { setMode('welcome'); });
+  document.getElementById('btnRegHome').addEventListener('click', function () { setMode('welcome'); });
+  document.getElementById('btnRecHome').addEventListener('click', function () { setMode('welcome'); });
+  // 初始化默认停在欢迎页（有 token 时下方 enterChat() 会直接进聊天）
+  showAuthView('welcome');
+  clearAuthInputs();
+  clearAuthInputsSoon();
   // ===== 注册：先验证三项凭据，再自设用户名/密码，账户此时才真正创建 =====
   var regVerifyBtn = document.getElementById('regVerifyBtn');
   var regFinishBtn = document.getElementById('regFinishBtn');
@@ -1503,6 +1579,7 @@
       if (!r.ok) { authErr.textContent = r.data.error || ('注册失败（' + r.status + '）'); regFinishBtn.disabled = false; return; }
       token = r.data.token;
       localStorage.setItem(TOKEN_KEY, token);
+      clearAuthInputs();
       await enterChat();
     } catch (e) { authErr.textContent = '网络错误，重试'; }
     regFinishBtn.disabled = false;
@@ -1597,6 +1674,7 @@
       }
       token = r.data.token;
       localStorage.setItem(TOKEN_KEY, token);
+      clearAuthInputs();
       await enterChat();
     } catch (e) {
       authErr.textContent = '网络错误，重试';
@@ -2322,7 +2400,15 @@
     document.getElementById('btnNavLogs').classList.add('hidden');
     document.getElementById('btnNavCtrl').classList.add('hidden');
     document.getElementById('btnNavMembers').classList.add('hidden');
-    document.getElementById('recoverView').classList.add('hidden');
+    // 退出登录：清空认证区残留并回到欢迎首页
+    clearAuthInputs();
+    clearAuthInputsSoon();
+    regVerified = null;
+    document.getElementById('regStep1').classList.remove('hidden');
+    document.getElementById('regStep2').classList.add('hidden');
+    authErr.textContent = '';
+    authErr.style.color = '';
+    showAuthView('welcome');
     authPanel.classList.remove('hidden');
     appShell.classList.add('hidden');
     authScreen.classList.remove('hidden');
@@ -4461,10 +4547,10 @@
 
   // 登录页：忘记密码 → 第三视图（未登录也能重置）
   document.getElementById('btnForgotPwd').addEventListener('click', function () {
-    document.getElementById('loginView').classList.add('hidden');
-    document.getElementById('registerView').classList.add('hidden');
-    document.getElementById('recoverView').classList.remove('hidden');
+    showAuthView('recover');
     authErr.textContent = '';
+    authErr.style.color = '';
+    clearAuthInputs();
   });
   document.getElementById('btnRecBack').addEventListener('click', function () { setMode('login'); });
   document.getElementById('btnAuthRecover').addEventListener('click', async function () {
@@ -4477,7 +4563,7 @@
       document.getElementById('authRecNew2').value
     );
     if (!r.ok) { authErr.textContent = r.data.error || ('重置失败（' + r.status + '）'); return; }
-    ['authRecCode', 'authRecUser', 'authRecNew', 'authRecNew2'].forEach(function (id) { document.getElementById(id).value = ''; });
+    clearAuthInputs();
     setMode('login');
     authErr.style.color = '#00ff96';
     authErr.textContent = '密码已重置成功，请用新密码登录。';
