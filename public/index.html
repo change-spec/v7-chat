@@ -90,11 +90,11 @@
     border-radius: 6px; padding: 11px 14px; cursor: pointer;
     transition: background .15s, box-shadow .15s;
   }
-  .nav-btn:hover { background: rgba(0,240,255,.1); box-shadow: 0 0 12px rgba(0,240,255,.2); }
+  .nav-btn:hover { background: rgba(0,240,255,.1); }
   .nav-btn.magenta { color: var(--magenta); border-color: rgba(255,46,151,.4); }
   .nav-btn.magenta:hover { background: rgba(255,46,151,.1); }
   .nav-btn.amber { color: var(--amber); border-color: rgba(255,184,0,.45); font-weight: 700; }
-  .nav-btn.amber:hover { background: rgba(255,184,0,.12); box-shadow: 0 0 12px rgba(255,184,0,.3); }
+  .nav-btn.amber:hover { background: rgba(255,184,0,.12); }
 
   .side-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; font-size: 12px; }
   .sc-row { display: flex; justify-content: space-between; padding: 4px 0; }
@@ -175,20 +175,36 @@
     font-family: inherit; font-size: 12.5px; letter-spacing: 1px;
     background: transparent; color: var(--cyan); border: 1px solid rgba(0,240,255,.5);
     border-radius: 6px; padding: 10px 20px; cursor: pointer;
-    --prox: 0; --hover: 0;
-    border-color: rgba(0,240,255, calc(.18 + (var(--prox) + var(--hover) * .55) * .82));
-    box-shadow: 0 0 calc(4px + (var(--prox) + var(--hover) * .55) * 20px) rgba(0,240,255, calc((var(--prox) + var(--hover) * .55) * .4));
     transition: background .15s ease, border-color .08s linear, box-shadow .15s ease, transform .1s ease;
   }
-  .btn:hover { --hover: 1; background: rgba(0,240,255,.12); }
+  .btn:hover { background: rgba(0,240,255,.12); }
   .btn:active { transform: scale(.96); }
   .btn:disabled { opacity: .35; cursor: not-allowed; }
   .btn.magenta { color: var(--magenta); border-color: rgba(255,46,151,.5); }
   .btn.magenta:hover { background: rgba(255,46,151,.12); }
   .btn.amber { color: var(--amber); border-color: rgba(255,184,0,.55); font-weight: 700; }
-  .btn.amber:hover { background: rgba(255,184,0,.12); box-shadow: 0 0 14px rgba(255,184,0,.3); }
+  .btn.amber:hover { background: rgba(255,184,0,.12); }
   .btn.small { font-size: 11px; padding: 6px 12px; }
   .btn.wide { width: 100%; }
+
+  /* ===== 全站统一按钮高亮：扫描线(--prox) + 光标(--hover) 双驱动 =====
+     独立于各按钮自身的 border/配色/形状，用发光层实现，覆盖所有 <button>，
+     包含导航栏、图标按钮、棋盘格，以及运行中用 JS 动态创建的按钮。 */
+  button { --prox: 0; --glow: 0,240,255; }
+  button.magenta { --glow: 255,46,151; }
+  button.amber, .force-refresh { --glow: 255,184,0; }
+  .btn-back { --glow: 122,122,146; }
+  button:not(.force-refresh):not(.pw-eye) { position: relative; }
+  button::after {
+    content: ''; position: absolute; inset: -1px; border-radius: inherit;
+    pointer-events: none;
+    border: 1px solid rgb(var(--glow));
+    box-shadow: 0 0 20px rgb(var(--glow)), inset 0 0 8px rgb(var(--glow));
+    opacity: var(--prox);
+    transition: opacity .08s linear;
+  }
+  button:hover::after { opacity: 1; }
+  button:disabled::after { opacity: 0; }
 
   input {
     font-family: inherit; font-size: 13px; background: rgba(0,240,255,.05); color: var(--text);
@@ -400,7 +416,7 @@
 
   @media (prefers-reduced-motion: reduce) {
     .scanline { display: none; }
-    .btn, .panel, input { transition: none; }
+    .btn, .panel, input, button::after { transition: none; }
     .msg, .conn-badge .dot { animation: none; }
   }
 
@@ -1274,18 +1290,50 @@
     { el: scanA, y: -40, cycle: 6.0 },
     { el: scanB, y: -400, cycle: 3.8 }
   ];
-  var targets = Array.prototype.slice.call(document.querySelectorAll('.btn, .panel'));
   var rects = [];
+  var active = [];
   var THRESH = 150;
+  var SCAN_SEL = 'button, .panel';
 
+  // 动态收集：页面上任何时刻存在的按钮都参与（含 JS 后创建的云盘/市场/棋盘格按钮）。
+  // 只保留视口 ±THRESH 内的元素，避免上千个按钮时每帧全量遍历。
   function measure() {
-    rects = targets.map(function (el) {
+    var h = window.innerHeight;
+    var all = document.querySelectorAll(SCAN_SEL);
+    var next = [];
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i];
       var r = el.getBoundingClientRect();
-      return { el: el, cy: r.top + r.height / 2 };
-    });
+      if (r.width === 0 || r.height === 0) continue;
+      var cy = r.top + r.height / 2;
+      if (cy < -THRESH || cy > h + THRESH) continue;
+      next.push({ el: el, cy: cy });
+    }
+    var inView = new Set();
+    for (var n = 0; n < next.length; n++) inView.add(next[n].el);
+    for (var j = 0; j < active.length; j++) {
+      if (!inView.has(active[j].el)) active[j].el.style.setProperty('--prox', '0');
+    }
+    active = next;
+    rects = next;
   }
-  window.addEventListener('scroll', measure, { passive: true, capture: true });
-  window.addEventListener('resize', measure);
+  var measureQueued = false;
+  function queueMeasure() {
+    if (measureQueued) return;
+    measureQueued = true;
+    requestAnimationFrame(function () { measureQueued = false; measure(); });
+  }
+  window.addEventListener('scroll', queueMeasure, { passive: true, capture: true });
+  window.addEventListener('resize', queueMeasure);
+  if (window.MutationObserver) {
+    var remeasurePending = false;
+    new MutationObserver(function () {
+      if (remeasurePending) return;
+      remeasurePending = true;
+      setTimeout(function () { remeasurePending = false; queueMeasure(); }, 80);
+    }).observe(document.body, { childList: true, subtree: true });
+  }
+  setInterval(queueMeasure, 1200);
   measure();
 
   var last = null;
