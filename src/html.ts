@@ -572,16 +572,16 @@ export const html = `<!DOCTYPE html>
     <div id="registerView" class="hidden">
       <div id="regStep1">
         <div class="field">
-          <label>belongs_to（归属管理员）</label>
-          <input id="regBelongs" placeholder="change-spec / git-k / kenkin / big-energy / teacher-student">
+          <label>belongs_to</label>
+          <input id="regBelongs">
         </div>
         <div class="field">
-          <label>identity（observer 或 member）</label>
-          <input id="regIdentity" placeholder="observer 或 member">
+          <label>identity</label>
+          <input id="regIdentity">
         </div>
         <div class="field">
-          <label>account_code（32 位）</label>
-          <input id="regCode" maxlength="64" placeholder="粘贴 Root-Admin 发放的 32 位凭据">
+          <label>account_code</label>
+          <input id="regCode" maxlength="64">
         </div>
         <button class="btn wide" id="regVerifyBtn">▸ 验证凭据</button>
       </div>
@@ -947,7 +947,7 @@ export const html = `<!DOCTYPE html>
         <div class="ctrl-col hidden" id="createAccZone">
           <h3>▸ 统一创建账号</h3>
           <div class="field">
-            <label>belongs_to（归属管理员）</label>
+            <label>belongs_to</label>
             <select id="inviteBelongs">
               <option value="change-spec">change-spec</option>
               <option value="git-k">git-k</option>
@@ -957,7 +957,7 @@ export const html = `<!DOCTYPE html>
             </select>
           </div>
           <div class="field">
-            <label>identity（身份）</label>
+            <label>identity</label>
             <select id="inviteIdentity">
               <option value="observer">Observer（只能围观，不能发言）</option>
               <option value="member" selected>User（普通成员）</option>
