@@ -106,13 +106,34 @@ function base64ToBytes(b64: string): Uint8Array {
   return out;
 }
 
-// 文件计费：统一 1MB / 20 Credits（向上取整，至少 20）
-function fileFee(size: number): number {
-  return Math.max(20, Math.ceil(Math.max(0, size) / (1024 * 1024)) * 20);
+// ===== 群收费倍率 =====
+// 默认：文件 1MB / 20 Credits、发言 20 字 / 10 Credits（向上取整，至少 1 个计费单位）。
+// 群主可自定义倍率的范围：A 类普通群、管理员交流群、各管理员小群（这些群都有明确群主）。
+//   · Geek公告群(geek)：全免费（别人不能发言、RA 发言/上传免费、成员下载 RA 文件免费）
+//   · B 类私聊(dm:*，成员与 Root-Admin 的私聊)：固定走默认倍率，按现有规则扣费
+// 倍率存 rooms.file_rate_per_mb / rooms.msg_rate_per20，NULL 表示使用默认值。
+const DEFAULT_FILE_RATE = 20;   // Credits / MB
+const DEFAULT_MSG_RATE = 10;    // Credits / 20 字
+async function roomRates(env: Env, room: string): Promise<{ fileRate: number; msgRate: number }> {
+  if (room === "geek") return { fileRate: 0, msgRate: 0 }; // 公告群：全员免费
+  try {
+    const row = await env.DB.prepare("SELECT class, file_rate_per_mb, msg_rate_per20 FROM rooms WHERE id = ?").bind(room)
+      .first<{ class: string | null; file_rate_per_mb: number | null; msg_rate_per20: number | null }>();
+    // B 类私聊固定默认倍率（与 Root-Admin 的私聊按现有正常倍率扣费，不参与自定义）
+    if (!row || row.class === "B") return { fileRate: DEFAULT_FILE_RATE, msgRate: DEFAULT_MSG_RATE };
+    return {
+      fileRate: row.file_rate_per_mb == null ? DEFAULT_FILE_RATE : Math.max(0, Number(row.file_rate_per_mb) || 0),
+      msgRate: row.msg_rate_per20 == null ? DEFAULT_MSG_RATE : Math.max(0, Number(row.msg_rate_per20) || 0)
+    };
+  } catch { return { fileRate: DEFAULT_FILE_RATE, msgRate: DEFAULT_MSG_RATE }; }
 }
-// 文字计费：20 字 / 10 Credits（向上取整，至少 10）
-function textFee(text: string): number {
-  return Math.max(10, Math.ceil(text.length / 20) * 10);
+function fileFeeFor(size: number, rate: number): number {
+  if (rate <= 0) return 0;
+  return Math.max(rate, Math.ceil(Math.max(0, size) / (1024 * 1024)) * rate);
+}
+function textFeeFor(text: string, rate: number): number {
+  if (rate <= 0) return 0;
+  return Math.max(rate, Math.ceil(text.length / 20) * rate);
 }
 
 const OTP_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%^&*";
@@ -175,6 +196,9 @@ async function ensureRoomSchema(env: Env): Promise<void> {
     await env.DB.prepare("UPDATE rooms SET class = 'C' WHERE class IS NULL AND (type = 'builtin' OR type = 'file')").run();
     await env.DB.prepare("UPDATE rooms SET class = 'A' WHERE class IS NULL").run();
   } catch {}
+  // 群收费倍率：每 MB Credits / 每 20 字 Credits（NULL = 使用默认 20 / 10）
+  try { await env.DB.prepare("ALTER TABLE rooms ADD COLUMN file_rate_per_mb REAL").run(); } catch {}
+  try { await env.DB.prepare("ALTER TABLE rooms ADD COLUMN msg_rate_per20 REAL").run(); } catch {}
   // 禁言表：room + username 唯一，until 为禁言结束时间（结束后 12 小时内不可再次禁言）
   try {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS room_mutes (
@@ -1337,6 +1361,29 @@ function isGeek(room: { id: string }): boolean {
   return room.id === "geek";
 }
 
+// 倍率可编辑范围：geek 公告群（全免费）与 B 类私聊（成员↔Root-Admin，固定默认）不可编辑；
+// 其余群（A 类普通群、管理员交流群、各管理员小群）由各自群主设定。
+function ratesEditable(roomId: string, cls: string | null): boolean {
+  if (roomId === "geek") return false;
+  if (cls === "B") return false;
+  return true;
+}
+async function roomRatesDetail(env: Env, roomId: string): Promise<{ class: string | null; fileRate: number; msgRate: number; editable: boolean }> {
+  // 公告群全免费：展示值与实际计费（roomRates）保持一致
+  if (roomId === "geek") return { class: "C", fileRate: 0, msgRate: 0, editable: false };
+  let cls: string | null = null, fileRate = DEFAULT_FILE_RATE, msgRate = DEFAULT_MSG_RATE;
+  try {
+    const row = await env.DB.prepare("SELECT class, file_rate_per_mb, msg_rate_per20 FROM rooms WHERE id = ?").bind(roomId)
+      .first<{ class: string | null; file_rate_per_mb: number | null; msg_rate_per20: number | null }>();
+    if (row) {
+      cls = row.class;
+      fileRate = row.file_rate_per_mb == null ? DEFAULT_FILE_RATE : Math.max(0, Number(row.file_rate_per_mb) || 0);
+      msgRate = row.msg_rate_per20 == null ? DEFAULT_MSG_RATE : Math.max(0, Number(row.msg_rate_per20) || 0);
+    }
+  } catch { /* 新列尚未迁移：退回默认倍率，不影响群设置其它功能 */ }
+  return { class: cls, fileRate, msgRate, editable: ratesEditable(roomId, cls) };
+}
+
 async function handleRoomMembers(request: Request, env: Env): Promise<Response> {
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
@@ -1360,11 +1407,39 @@ async function handleRoomMembers(request: Request, env: Env): Promise<Response> 
       mutedUntil: mutedUntil
     };
   }));
+  const rates = await roomRatesDetail(env, id);
   return json({
     id: room.id, name: room.name, type: room.type, creator: room.creator,
     passcode: isGeek(room) ? null : (room.passcode || ""),
-    members
+    members,
+    class: rates.class,
+    fileRate: rates.fileRate, msgRate: rates.msgRate,
+    defaultFileRate: DEFAULT_FILE_RATE, defaultMsgRate: DEFAULT_MSG_RATE,
+    ratesEditable: rates.editable && room.creator === user.username
   });
+}
+
+// 群主设置本群收费倍率：仅可编辑群（A 类 / 管理员交流群 / 各管理员小群）的群主
+async function handleRoomRatesSet(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  let body: { id?: string; fileRate?: number; msgRate?: number };
+  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  const id = (body.id || "").trim();
+  if (!id) return json({ error: "缺少房间" }, 400);
+  const room = await getRoomRow(env, id);
+  if (!room) return json({ error: "房间不存在" }, 404);
+  if (room.creator !== user.username) return json({ error: "只有群主可以设置本群收费倍率" }, 403);
+  const cur = await roomRatesDetail(env, id);
+  if (!cur.editable) return json({ error: "该群聊为内置固定倍率（公告群全免费 / 私聊固定默认），不可修改" }, 403);
+  const fr = Number(body.fileRate);
+  const mr = Number(body.msgRate);
+  if (!isFinite(fr) || !isFinite(mr) || fr < 0 || mr < 0 || fr > 100000 || mr > 100000) {
+    return json({ error: "倍率须为 0 - 100000 的数字（0 = 免费）" }, 400);
+  }
+  await env.DB.prepare("UPDATE rooms SET file_rate_per_mb = ?, msg_rate_per20 = ? WHERE id = ?")
+    .bind(Math.round(fr * 100) / 100, Math.round(mr * 100) / 100, id).run();
+  return json({ ok: true, fileRate: Math.round(fr * 100) / 100, msgRate: Math.round(mr * 100) / 100 });
 }
 
 async function handleRoomPasscode(request: Request, env: Env): Promise<Response> {
@@ -1532,11 +1607,12 @@ async function handleFileQuote(request: Request, env: Env): Promise<Response> {
   try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
   const size = Math.max(0, Number(body.size) || 0);
   const room = (body.room || "").trim();
-  const free = room === "geek" && user.role === "root-admin";
-  const cost = free ? 0 : fileFee(size);
+  const rates = await roomRates(env, room);
+  const cost = fileFeeFor(size, rates.fileRate);
+  const free = cost === 0;
   const row = await env.DB.prepare("SELECT points FROM accounts WHERE username = ?").bind(user.username).first<{ points: number }>();
   const balance = row ? row.points : 0;
-  return json({ cost: cost, free: free, balance: balance, enough: free || balance >= cost });
+  return json({ cost: cost, free: free, balance: balance, enough: free || balance >= cost, fileRate: rates.fileRate });
 }
 
 function gameTypeName(type: string): string {
@@ -1561,13 +1637,12 @@ async function handleFilePay(request: Request, env: Env): Promise<Response> {
     return json({ error: "请求格式错误" }, 400);
   }
   const size = Math.max(0, Number(body.size) || 0);
-  const cost = fileFee(size);
   const room = (body.room || "").trim();
-  // 免费仅两处：公告群里 Root-Admin 下载、自己发送的文件
-  const freeRoom = room === "geek" && user.role === "root-admin";
-  if (freeRoom) return json({ ok: true, cost: 0, free: true });
+  const rates = await roomRates(env, room);
+  const cost = fileFeeFor(size, rates.fileRate);
+  if (cost === 0) return json({ ok: true, cost: 0, free: true });
   if (!(await spendCredits(env, user.username, cost))) {
-    return json({ error: "Credits 不足：下载该文件需 " + cost + " Credits（1MB/20Credits，" + fmtBytes(size) + "）" }, 402);
+    return json({ error: "Credits 不足：下载该文件需 " + cost + " Credits（每MB " + rates.fileRate + "Credits，" + fmtBytes(size) + "）" }, 402);
   }
   await logCredits(env, user.username, -cost, "文件下载");
   return json({ ok: true, cost: cost });
@@ -2244,12 +2319,15 @@ async function handleCloudRepost(request: Request, env: Env): Promise<Response> 
   if (f.size > CHAT_FILE_CAP) {
     return json({ error: "该文件 " + fmtMB(f.size) + "MB 超过聊天文件单文件上限 " + (CHAT_FILE_CAP / (1024 * 1024)) + "MB，无法转载" }, 413);
   }
-  // 转载按正常发送价扣费（文件 1MB/20Credits），所有人适用（含 Root-Admin）
-  const cost = fileFee(f.size);
+  // 转载按目标群的文件发送/下载计费标准扣费（群主可自定义倍率）
+  const rates = await roomRates(env, room);
+  const cost = fileFeeFor(f.size, rates.fileRate);
   const bal = await pointsOf(env, user.username);
-  if (bal < cost) return json({ error: "Credits 不足：转载需 " + cost + " Credits（1MB/20Credits）", balance: bal }, 402);
-  await spendCredits(env, user.username, cost);
-  await logCredits(env, user.username, -cost, "云文件转载");
+  if (bal < cost) return json({ error: "Credits 不足：转载需 " + cost + " Credits（每MB " + rates.fileRate + "Credits）", balance: bal }, 402);
+  if (cost > 0) {
+    await spendCredits(env, user.username, cost);
+    await logCredits(env, user.username, -cost, "云文件转载");
+  }
   const b64 = await assembleCloudFile(env, user.username, fileId);
   if (b64 === null) return json({ error: "云文件数据缺失" }, 404);
   const newId = "f" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -2271,6 +2349,56 @@ async function handleCloudRepost(request: Request, env: Env): Promise<Response> 
     }));
   } catch {}
   return json({ ok: true, cost, ...(await cloudStatus(env, user)) });
+}
+
+// ===== ZIP 工具：把内存中的文件字节（压缩结果 / 解压缓存区单文件）转载到某个可发言群聊 =====
+// 计费按目标群的文件发送/下载标准（群主可自定义倍率）；二进制 body 避免 base64 JSON 膨胀。
+async function handleZipRepost(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  const url = new URL(request.url);
+  const room = (url.searchParams.get("room") || "").trim();
+  const name = (url.searchParams.get("name") || "file.zip").slice(0, 200);
+  const mime = (url.searchParams.get("mime") || "application/octet-stream").slice(0, 200);
+  if (!room) return json({ error: "缺少目标群聊" }, 400);
+  if (!(await isMember(env.DB, room, user.username))) return json({ error: "你不是该房间成员" }, 403);
+  // 与群聊发言/上传同一套可发言权限
+  if (room === "geek" && user.role !== "root-admin") return json({ error: "Geek公告群仅 Root-Admin 可发布内容" }, 403);
+  if (user.role === "observer" && room !== "dm:" + user.username) return json({ error: "观测者只能在「与 Root-Admin 的私聊」里发送" }, 403);
+  let buf: ArrayBuffer;
+  try { buf = await request.arrayBuffer(); } catch { return json({ error: "读取文件失败" }, 400); }
+  const size = buf.byteLength;
+  if (size <= 0) return json({ error: "空文件" }, 400);
+  if (size > CHAT_FILE_CAP) {
+    return json({ error: "该文件 " + fmtMB(size) + "MB 超过聊天文件单文件上限 " + (CHAT_FILE_CAP / (1024 * 1024)) + "MB，无法转载到群聊" }, 413);
+  }
+  const rates = await roomRates(env, room);
+  const cost = fileFeeFor(size, rates.fileRate);
+  const bal = await pointsOf(env, user.username);
+  if (bal < cost) return json({ error: "Credits 不足：转载需 " + cost + " Credits（每MB " + rates.fileRate + "Credits）", balance: bal }, 402);
+  const b64 = bytesToBase64(new Uint8Array(buf));
+  const newId = "f" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const now = new Date().toISOString();
+  if (cost > 0) {
+    await spendCredits(env, user.username, cost);
+    await logCredits(env, user.username, -cost, "ZIP工具文件转载到群聊");
+  }
+  await env.DB.prepare("INSERT INTO chat_files (id, room, sender, name, size, mime, data, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    .bind(newId, room, user.username, name, size, mime, b64, now).run();
+  const marker = JSON.stringify({ __file: 1, id: newId, name: name, size: size, mime: mime });
+  await env.DB.prepare("INSERT INTO messages (room, sender, role, text, ts) VALUES (?, ?, ?, ?, ?)")
+    .bind(room, user.username, user.role, marker, now).run();
+  await purgeOldMessages(env);
+  try {
+    const roomId = env.ROOM.idFromName("main");
+    const dobj = env.ROOM.get(roomId);
+    await dobj.fetch(new Request("http://do/notify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ type: "msg", sender: user.username, role: user.role, text: marker, ts: now, room })
+    }));
+  } catch {}
+  return json({ ok: true, cost, fileRate: rates.fileRate });
 }
 
 async function handleCloudRenew(request: Request, env: Env): Promise<Response> {
@@ -3187,6 +3315,8 @@ export default {
     if (url.pathname === "/api/rooms/mute" && request.method === "POST") return handleRoomMute(request, env);
     if (url.pathname === "/api/rooms/disband" && request.method === "POST") return handleRoomDisband(request, env);
     if (url.pathname === "/api/rooms/join-pw" && request.method === "POST") return handleRoomJoinByPassword(request, env);
+    if (url.pathname === "/api/rooms/rates" && request.method === "POST") return handleRoomRatesSet(request, env);
+    if (url.pathname === "/api/zip/repost" && request.method === "POST") return handleZipRepost(request, env);
     if (url.pathname === "/api/file/quote" && request.method === "POST") return handleFileQuote(request, env);
     if (url.pathname === "/api/accounts/list" && request.method === "GET") return handleAccountsList(request, env);
     if (url.pathname === "/api/cloud/status" && request.method === "GET") return handleCloudStatus(request, env);
@@ -3364,16 +3494,17 @@ export class Room {
           return;
         }
         const size = Math.max(0, Number(data.size) || 0);
-        const freeRoom = room === "geek" && user.role === "root-admin";
-        // 文件上传计费：统一 1MB / 20 Credits（向上取整，至少 20）；
-        // 唯一免费场景：公告群里 Root-Admin 发布；其余一切房间都扣费
-        if (data.type === "file-start" && !freeRoom) {
-          const cost = fileFee(size);
-          if (!(await spendCredits(this.env, user.username, cost))) {
-            this.sendTo(ws, { type: "sys", text: "Credits 不足：上传文件需 " + cost + " Credits（1MB/20Credits，当前文件 " + fmtBytes(size) + "）" });
-            return;
+        // 文件上传计费：按该群自定义倍率（每 MB 单价）；geek 公告群倍率 0 → 免费
+        if (data.type === "file-start") {
+          const rates = await roomRates(this.env, room);
+          const cost = fileFeeFor(size, rates.fileRate);
+          if (cost > 0) {
+            if (!(await spendCredits(this.env, user.username, cost))) {
+              this.sendTo(ws, { type: "sys", text: "Credits 不足：上传文件需 " + cost + " Credits（每MB " + rates.fileRate + "Credits，当前文件 " + fmtBytes(size) + "）" });
+              return;
+            }
+            await logCredits(this.env, user.username, -cost, "文件上传");
           }
-          await logCredits(this.env, user.username, -cost, "文件上传");
         }
         // 准备服务端落盘缓冲（作为聊天记录保留 7 天，与 messages 同步清理）；分块在收到时即时落库
         if (data.type === "file-start") {
@@ -3467,15 +3598,17 @@ export class Room {
       }
     }
 
-    // 发言计费：公告群仅 Root-Admin 可发（免费）；其它群 20 字 / 10 Credits（向上取整至少 10）；
-    // 所有人都扣（含 Root-Admin），唯一例外是 Geek 公告群（仅 Root-Admin 可发，免费）
-    if (room !== "geek") {
-      const cost = textFee(text);
-      if (!(await spendCredits(this.env, user.username, cost))) {
-        this.sendTo(ws, { type: "sys", text: "Credits 不足：本房间发言需 " + cost + " Credits（20 字/10Credits，本条 " + text.length + " 字）" });
-        return;
+    // 发言计费：按该群自定义倍率（每 20 字单价）；geek 公告群倍率 0 → 免费
+    {
+      const rates = await roomRates(this.env, room);
+      const cost = textFeeFor(text, rates.msgRate);
+      if (cost > 0) {
+        if (!(await spendCredits(this.env, user.username, cost))) {
+          this.sendTo(ws, { type: "sys", text: "Credits 不足：本房间发言需 " + cost + " Credits（每20字 " + rates.msgRate + "Credits，本条 " + text.length + " 字）" });
+          return;
+        }
+        await logCredits(this.env, user.username, -cost, "群聊发言");
       }
-      await logCredits(this.env, user.username, -cost, "群聊发言");
     }
 
     const ts = new Date().toISOString();

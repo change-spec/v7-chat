@@ -547,6 +547,21 @@
   .cf-size { color: var(--dim); font-size:12px; }
   .cf-folder { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:10px 0 4px; padding:6px 10px; background:linear-gradient(90deg,rgba(177,75,255,.18),rgba(0,255,150,.12)); border:1px solid rgba(177,75,255,.35); border-radius:10px; }
   .cf-folder-name { font-weight:600; color:#e9d5ff; font-size:13px; }
+  /* ===== ZIP 解压缩工具 ===== */
+  .zip-tabs { display:flex; gap:10px; margin:6px 0 14px; }
+  .zip-tabs .btn { flex:1; }
+  .zip-tabs .btn.on { background: rgba(0,240,255,.16); box-shadow: 0 0 14px rgba(0,240,255,.28); }
+  .zip-note { font-size:12px; color: var(--dim); text-align:left; line-height:1.6; margin:0 0 12px; padding:8px 10px; border:1px dashed var(--line); border-radius:8px; }
+  .zip-note b { color: var(--amber); }
+  .zip-cache { background:rgba(255,255,255,.02); border:1px solid var(--line); border-radius:10px; padding:10px; margin:10px 0; min-height:56px; }
+  .zip-cache-head { display:flex; justify-content:space-between; align-items:center; font-size:12px; color: var(--dim); margin-bottom:8px; letter-spacing:.5px; }
+  .zip-empty { color: var(--dim); font-size:12px; text-align:center; padding:14px 4px; }
+  .zip-cache .cf-row { margin-bottom:6px; }
+  .zip-cache .cf-row:last-child { margin-bottom:0; }
+  .zip-file-tag { font-size:10px; color: var(--cyan); border:1px solid rgba(0,240,255,.35); border-radius:5px; padding:1px 5px; margin-right:4px; }
+  .zip-dest-grid { display:flex; flex-direction:column; gap:8px; margin:10px 0; }
+  .zip-dest-grid .btn { text-align:left; }
+  .zip-dest-grid .btn:disabled { opacity:.4; }
   .ck { display:flex; align-items:center; gap:6px; font-size:13px; color: var(--dim); margin:6px 0; }
   .badge { display:inline-block; font-size:10px; font-weight:700; padding:1px 6px; border-radius:6px; margin-left:6px; vertical-align:middle; letter-spacing:.5px; }
   .badge-A { background: rgba(0,240,255,.15); color: var(--cyan); border:1px solid rgba(0,240,255,.4); }
@@ -684,6 +699,7 @@
       <button class="nav-btn" id="btnNavRedeem">▸ 兑换 Credits</button>
       <button class="nav-btn" id="btnNavGame">🎮 游戏</button>
       <button class="nav-btn amber" id="btnNavShop">🛒 SHOP</button>
+      <button class="nav-btn" id="btnNavZip">🗜 ZIP解压缩工具</button>
       <button class="nav-btn hidden" id="btnNavCmd">▸ 命令行</button>
       <button class="nav-btn" id="btnNavCloud">☁ 云存储</button>
       <button class="nav-btn hidden" id="btnNavMembers">▸ 成员信息</button>
@@ -852,12 +868,70 @@
             <button class="btn wide" id="btnMktUpload">▸ 上架这个文件 / 文件夹</button>
           </div>
         </div>
+        <div id="zipMarketHint" class="hidden" style="margin:8px 0;padding:8px 10px;border:1px solid rgba(0,255,150,.35);border-radius:8px;background:rgba(0,255,150,.07);color:#8fdcb4;font-size:12px"></div>
         <div class="err" id="mktUploadErr"></div>
 
         <div class="market-list" id="mktList"></div>
       </div>
 
       <div class="tool-row"><button class="btn small magenta" id="btnShopBack">▸ 返回聊天</button></div>
+    </div>
+
+    <!-- ========== ZIP 解压缩工具 ========== -->
+    <div class="panel hidden" id="zipPanel">
+      <h2>🗜 ZIP 解压缩工具</h2>
+      <div class="zip-tabs">
+        <button class="btn on" id="zipTabPack">压缩模式</button>
+        <button class="btn" id="zipTabUnpack">解压模式</button>
+      </div>
+
+      <!-- 压缩模式 -->
+      <div id="zipPackView">
+        <div class="zip-note">
+          上传多个文件、或一个或多个文件夹，全部先进入<b>下方缓存区</b>，再点击「开始压缩」。
+          多个文件夹会自动新建一个根目录，把各文件夹原样装进去。
+          缓存区仅存在于当前页面内存，<b>刷新后消失</b>，不会占云空间、不上传服务器。
+        </div>
+        <div class="field">
+          <label>上传多个文件</label>
+          <input type="file" id="zipPackFiles" multiple>
+        </div>
+        <div class="field">
+          <label>上传文件夹（可多次选择，累积进缓存区）</label>
+          <input type="file" id="zipPackFolders" webkitdirectory multiple>
+        </div>
+        <div class="zip-cache">
+          <div class="zip-cache-head"><span>压缩缓存区 · 待打包 <b id="zipPackCount">0</b> 项</span><button class="btn small magenta" id="zipPackClear">清空缓存区</button></div>
+          <div id="zipPackList"><div class="zip-empty">还没有文件，先上传</div></div>
+        </div>
+        <div class="field">
+          <label>压缩包名称</label>
+          <input id="zipPackName" type="text" maxlength="120" placeholder="打包.zip">
+        </div>
+        <button class="btn wide" id="zipPackGo">🗜 开始压缩</button>
+        <div class="err" id="zipPackErr"></div>
+      </div>
+
+      <!-- 解压模式 -->
+      <div id="zipUnpackView" class="hidden">
+        <div class="zip-note">
+          上传本机 .zip 文件，或从文件资源商店 / 群聊购买 .zip 后点「上传至ZIP解压缩工具」直接送进来。
+          解压后的每个文件都显示在<b>下方缓存区</b>，可逐个下载 / 转载，或「分别下载至本机」。
+          缓存区仅存在于当前页面内存，<b>刷新后消失</b>，没有删除按钮，也没有其它去处。
+        </div>
+        <div class="field">
+          <label>上传本机 .zip 压缩文件</label>
+          <input type="file" id="zipUnpackFile" accept=".zip,application/zip">
+        </div>
+        <div class="zip-cache">
+          <div class="zip-cache-head"><span>解压缓存区 · <b id="zipUnpackCount">0</b> 个文件 · 刷新后消失</span></div>
+          <div id="zipUnpackList"><div class="zip-empty">还没有解压结果</div></div>
+        </div>
+        <button class="btn wide" id="zipUnpackDownloadAll">⬇ 分别下载至本机</button>
+        <div class="err" id="zipUnpackErr"></div>
+      </div>
+
+      <div class="tool-row" style="margin-top:14px"><button class="btn small magenta" id="btnZipBack">▸ 返回聊天</button></div>
     </div>
 
     <div class="panel hidden" id="cloudPanel">
@@ -1236,6 +1310,23 @@
         <button class="btn small" id="btnSavePass" style="flex-shrink:0">▸ 保存</button>
       </div>
     </div>
+    <div class="field hidden" id="gsRateZone">
+      <label>本群收费倍率（群主专属）</label>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <span style="flex:1;min-width:180px;font-size:12px;color:var(--dim)">文件上传 / 下载（每 MB）</span>
+        <input id="gsFileRate" type="number" min="0" max="100000" step="1" style="width:110px" placeholder="默认 20">
+        <span style="font-size:12px;color:var(--dim)">Credits</span>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px">
+        <span style="flex:1;min-width:180px;font-size:12px;color:var(--dim)">发言（每 20 字）</span>
+        <input id="gsMsgRate" type="number" min="0" max="100000" step="1" style="width:110px" placeholder="默认 10">
+        <span style="font-size:12px;color:var(--dim)">Credits</span>
+      </div>
+      <div class="tool-row" style="justify-content:flex-start;margin:10px 0 0">
+        <button class="btn small" id="btnSaveRates">▸ 保存倍率</button>
+      </div>
+      <div class="hint" style="margin-top:8px;text-align:left">默认：文件 <b id="gsDefFile">20</b> Credits/MB，发言 <b id="gsDefMsg">10</b> Credits/20 字 · 填 <b>0</b> = 该群免费。公告群全免费、与 Root-Admin 的私聊固定默认倍率，均不可修改。</div>
+    </div>
     <div class="field hidden" id="gsOwnerZone">
       <label>群主专属管理</label>
       <button class="btn wide magenta" id="btnDisbandGroup" style="border-color:rgba(255,46,151,.7)">⚠ 解散群聊（不可恢复）</button>
@@ -1290,6 +1381,7 @@
     <div class="err" id="fcErr"></div>
     <div class="tool-row" style="justify-content:center;margin-bottom:0">
       <button class="btn" id="btnFcConfirm">▸ 确认</button>
+      <button class="btn small hidden" id="btnFcZip">🗜 上传至ZIP解压缩工具</button>
       <button class="btn small magenta" id="btnFcCancel">取消</button>
     </div>
   </div>
@@ -1306,6 +1398,54 @@
     <button class="btn small magenta" id="btnRepostCancel">取消</button>
   </div>
 </div>
+</div>
+
+<!-- ZIP 工具：压缩完成后的去处选择 -->
+<div class="modal hidden" id="zipDestModal">
+  <div class="modal-box" style="max-width:460px;text-align:left">
+    <div class="modal-title">🗜 压缩完成 · 选择去处</div>
+    <p id="zipDestInfo" style="text-align:left;margin-bottom:8px"></p>
+    <div class="zip-dest-grid">
+      <button class="btn" id="zipDestRoom">① 转载至可发言的群聊（按该群计费标准扣费）</button>
+      <button class="btn" id="zipDestCloud">② 转载至我的云存储</button>
+      <button class="btn" id="zipDestLocal">③ 下载至本机</button>
+      <button class="btn" id="zipDestMarket">④ 转载至文件资源商店（自动带入上架栏）</button>
+    </div>
+    <div class="err" id="zipDestErr"></div>
+    <div class="tool-row" style="justify-content:center;margin-bottom:0">
+      <button class="btn small magenta" id="zipDestClose">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 市场购买「接收方式」弹窗：.zip 额外提供「上传至ZIP解压缩工具」 -->
+<div class="modal hidden" id="mktDeliverModal">
+  <div class="modal-box" style="max-width:460px;text-align:left">
+    <div class="modal-title">▸ 选择接收方式</div>
+    <p id="mktDeliverInfo" style="text-align:left;margin-bottom:12px"></p>
+    <div class="zip-dest-grid">
+      <button class="btn" id="mktDelLocal">⬇ 下载至本机</button>
+      <button class="btn" id="mktDelCloud">☁ 存入我的云空间</button>
+      <button class="btn hidden" id="mktDelZip">🗜 上传至ZIP解压缩工具</button>
+    </div>
+    <div class="tool-row" style="justify-content:center;margin-bottom:0">
+      <button class="btn small magenta" id="mktDelCancel">取消购买</button>
+    </div>
+  </div>
+</div>
+
+<!-- ZIP 工具：转载到群聊（压缩结果 / 解压缓存区单文件共用） -->
+<div class="modal hidden" id="zipRepostModal">
+  <div class="modal-box" style="max-width:440px;text-align:left">
+    <div class="modal-title">▸ 转载到群聊</div>
+    <p id="zipRepostInfo" style="text-align:left;margin-bottom:12px"></p>
+    <div class="field"><label>选择目标群聊（你可发言的群）</label><select id="zipRepostRoom" class="wide"></select></div>
+    <div class="err" id="zipRepostErr"></div>
+    <div class="tool-row" style="justify-content:center;margin-bottom:0">
+      <button class="btn" id="zipRepostConfirm">▸ 确认转载（扣费）</button>
+      <button class="btn small magenta" id="zipRepostCancel">取消</button>
+    </div>
+  </div>
 </div>
 
 <div class="modal hidden" id="mktCloudModal">
@@ -1454,10 +1594,15 @@
   }
 
   // 输入框按房间/身份自适应：观测者仅与 Root-Admin 的私聊可发言；公告群仅 Root-Admin 可发言；
-  // 计费提示：其它群发言 20 字/10Credits，文件上传/下载 1MB/20Credits（公告群 Root-Admin 免费）
+  // 计费提示按本群倍率（群主可自定义），实际扣费一律以服务端为准
+  var currentRoomRates = null; // { fileRate, msgRate }，进入房间时从 /api/rooms/members 读取
+  function rateHint() {
+    if (!currentRoomRates) return ' · 按本群计费倍率';
+    return ' · 发言 每20字 ' + currentRoomRates.msgRate + 'C · 文件 每MB ' + currentRoomRates.fileRate + 'C';
+  }
   function applyRoomInput() {
     var charged = !!currentRoom && currentRoom !== 'geek';
-    var chargeHint = ' · 本房发言 20 字/10Credits · 文件 1MB/20Credits';
+    var chargeHint = rateHint();
     if (meRole === 'observer') {
       var canSpeakObs = currentRoom === 'dm:' + me;
       msgInput.disabled = !canSpeakObs;
@@ -1483,7 +1628,7 @@
     btnSend.disabled = false;
     btnFile.disabled = false;
     msgInput.placeholder = '输入消息，回车发送' + (charged ? chargeHint : '');
-    btnFile.title = '发送文件（≤' + fmtSize(MAX_FILE) + '）' + (charged ? ' · 上传 1MB/20Credits' : '');
+    btnFile.title = '发送文件（≤' + fmtSize(MAX_FILE) + '）' + (charged && currentRoomRates ? ' · 上传 每MB ' + currentRoomRates.fileRate + ' Credits' : '');
   }
 
   // 认证区所有输入框：切换视图 / 认证完成 / 退出登录时一律清空，避免账号密码与找回代码残留
@@ -1951,7 +2096,8 @@
   var pendingInvite = null;
   var redeemPanel = document.getElementById('redeemPanel');
   var shopPanel = document.getElementById('shopPanel');
-  var PANELS = [chatPanel, cmdPanel, redeemPanel, logPanel, ctrlPanel, settingsPanel, gameLobby, gamePayPanel, gameRoomPanel, shopPanel, cloudPanel, membersPanel];
+  var zipPanel = document.getElementById('zipPanel');
+  var PANELS = [chatPanel, cmdPanel, redeemPanel, logPanel, ctrlPanel, settingsPanel, gameLobby, gamePayPanel, gameRoomPanel, shopPanel, cloudPanel, membersPanel, zipPanel];
   function showOnly(el) {
     PANELS.forEach(function (p) { if (p) p.classList.toggle('hidden', p !== el); });
     inCmdPage = (el === cmdPanel);
@@ -2966,21 +3112,24 @@
       card.appendChild(dl);
       return;
     }
-    var cost = Math.max(20, Math.ceil(size / (1024 * 1024)) * 20);
+    var cost = 0; // 实际费用以后端 /api/file/quote 为准（群主可自定义倍率）
     var payBtn = document.createElement('button');
     payBtn.className = 'f-dl';
     payBtn.type = 'button';
-    payBtn.textContent = '💾 付费下载 · ' + cost + ' Credits';
+    payBtn.textContent = '💾 付费下载 · 点击查看费用';
     payBtn.addEventListener('click', async function () {
-      // 下载前弹窗确认费用
-      var quote = { cost: cost, free: false, balance: 0, enough: false };
+      // 下载前弹窗确认费用（按本群倍率，由服务端报价）
+      var quote = { cost: 0, free: false, balance: 0, enough: false };
       try {
         var qr = await api('/api/file/quote', { size: size, room: fileRoom });
         if (qr.ok) quote = qr.data;
       } catch (e) {}
+      cost = quote.free ? 0 : quote.cost;
+      if (quote.cost > 0) payBtn.textContent = '💾 付费下载 · ' + quote.cost + ' Credits';
+      var isZipFile = /\.zip$/i.test(name || '');
       showFileConfirm('▸ 文件下载确认', [
         '文件：' + name + '（' + fmtSize(size) + '）',
-        quote.free ? '费用：免费' : '费用：' + quote.cost + ' Credits（1MB/20Credits）',
+        quote.free ? '费用：免费' : '费用：' + quote.cost + ' Credits（按本群文件计费标准）',
         '当前余额：' + quote.balance + ' Credits'
       ], quote.enough, '▸ 确认下载', async function () {
         payBtn.disabled = true;
@@ -3016,7 +3165,28 @@
           payBtn.textContent = '网络错误，点我重试';
           payBtn.disabled = false;
         }
-      });
+      }, null, isZipFile ? async function () {
+        // 「上传至ZIP解压缩工具」：同样先付费，再把字节送进解压模式并跳转
+        payBtn.disabled = true;
+        payBtn.textContent = '支付中…';
+        try {
+          var r = await api('/api/file/pay', { size: size, name: name, room: fileRoom });
+          if (!r.ok) {
+            payBtn.textContent = '⚠ ' + (r.data.error || '支付失败');
+            appendSys(r.data.error || '下载支付失败');
+            payBtn.disabled = false;
+            return;
+          }
+          var blob = await serverDownload(fileId, name);
+          var u8 = new Uint8Array(await blob.arrayBuffer());
+          zipToolIngestZip(u8, name);
+          payBtn.textContent = '✓ 已送入 ZIP 工具（-' + cost + ' Credits）';
+          refreshMe();
+        } catch (e) {
+          payBtn.textContent = '失败，点我重试';
+          payBtn.disabled = false;
+        }
+      } : null);
     });
     card.appendChild(payBtn);
   }
@@ -3027,7 +3197,8 @@
   var fileConfirmModal = document.getElementById('fileConfirmModal');
   var fcConfirmCb = null;
   var fcCancelCb = null;
-  function showFileConfirm(title, lines, enough, confirmLabel, cb, onCancel) {
+  var fcZipCb = null;
+  function showFileConfirm(title, lines, enough, confirmLabel, cb, onCancel, zipCb) {
     document.getElementById('fcTitle').textContent = title;
     var textEl = document.getElementById('fcText');
     textEl.innerHTML = '';
@@ -3043,19 +3214,27 @@
     var btnOk = document.getElementById('btnFcConfirm');
     btnOk.disabled = !enough;
     btnOk.textContent = enough ? (confirmLabel || '▸ 确认') : '✕ 无法操作';
+    var btnZip = document.getElementById('btnFcZip');
+    btnZip.classList.toggle('hidden', !zipCb);   // 仅 .zip 付费下载时显示
     fcConfirmCb = cb;
     fcCancelCb = onCancel || null;
+    fcZipCb = zipCb || null;
     fileConfirmModal.classList.remove('hidden');
   }
   document.getElementById('btnFcConfirm').addEventListener('click', function () {
     fileConfirmModal.classList.add('hidden');
     if (fcConfirmCb) { var cb = fcConfirmCb; fcConfirmCb = null; cb(); }
-    fcCancelCb = null;
+    fcCancelCb = null; fcZipCb = null;
+  });
+  document.getElementById('btnFcZip').addEventListener('click', function () {
+    fileConfirmModal.classList.add('hidden');
+    if (fcZipCb) { var z = fcZipCb; fcZipCb = null; z(); }
+    fcConfirmCb = null; fcCancelCb = null;
   });
   document.getElementById('btnFcCancel').addEventListener('click', function () {
     fileConfirmModal.classList.add('hidden');
     if (fcCancelCb) { var c = fcCancelCb; fcCancelCb = null; c(); }
-    fcConfirmCb = null;
+    fcConfirmCb = null; fcZipCb = null;
   });
 
   fileInput.addEventListener('change', async function () {
@@ -3077,7 +3256,7 @@
     showFileConfirm('▸ 文件发送确认', [
       '文件：' + f.name + '（' + fmtSize(f.size) + '）',
       '房间：' + (document.getElementById('chatRoomName').textContent || currentRoom),
-      quote.free ? '费用：免费' : '费用：' + quote.cost + ' Credits（1MB/20Credits）',
+      quote.free ? '费用：免费' : '费用：' + quote.cost + ' Credits（按本群文件计费标准）',
       '当前余额：' + quote.balance + ' Credits'
     ], quote.enough, '▸ 确认发送', function () { startUpload(f, quote.cost); });
   });
@@ -3096,7 +3275,7 @@
         // 上传方本地卡片补完成态（自己的文件下载免费）
         fileDone(fileId, URL.createObjectURL(f), f.name, f.size, true);
         if (uploadCost > 0) {
-          appendSys('文件已发送（上传扣除 ' + uploadCost + ' Credits · 1MB/20Credits）');
+          appendSys('文件已发送（上传扣除 ' + uploadCost + ' Credits · 按本群文件计费标准）');
           refreshMe();
         }
         return;
@@ -3157,12 +3336,22 @@
     for (var i = 0; i < roomsData.length; i++) { if (roomsData[i].id === id) found = roomsData[i]; }
     var rn = document.getElementById('chatRoomName');
     if (rn) rn.textContent = found ? found.name : id;
-    // 内置会话（公告群）没有群设置
-    document.getElementById('btnConvSettings').classList.toggle('hidden', !!found && found.type === 'builtin');
+    // 群设置可见性：Geek 公告群全免费、无管理项 → 隐藏；
+    // 其余内置群（管理员交流群 / 各管理员小群）仅对群主开放，供其设置本群收费倍率；普通群照旧。
+    var canSettings = !!found && (found.type !== 'builtin' || (found.id !== 'geek' && found.creator === me));
+    document.getElementById('btnConvSettings').classList.toggle('hidden', !canSettings);
     renderRoomList();
     showChatPage('conv');
     applyRoomInput();
     applyInputLimit();
+    // 读取本群收费倍率用于输入框提示（失败时保持中性提示，不影响功能）
+    currentRoomRates = null;
+    api('/api/rooms/members?id=' + encodeURIComponent(id)).then(function (r) {
+      if (r.ok && r.data && typeof r.data.fileRate === 'number' && currentRoom === id) {
+        currentRoomRates = { fileRate: r.data.fileRate, msgRate: r.data.msgRate };
+        applyRoomInput();
+      }
+    }).catch(function () {});
     messages.innerHTML = '<div class="empty">进入会话中…</div>';
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'join-room', room: id }));
@@ -3244,9 +3433,19 @@
     var iAmOwner = gsData.creator === me;
     var iAmAdmin = meRole === 'admin' || meRole === 'root-admin';
     var isGeek = gsData.id === 'geek';
+    var isBuiltin = gsData.type === 'builtin'; // 内置群不支持加群密码/解散/转让/踢人
     document.getElementById('gsMemberCount').textContent = gsData.members.length;
-    document.getElementById('gsPassZone').classList.toggle('hidden', isGeek);
-    document.getElementById('gsOwnerZone').classList.toggle('hidden', !(iAmOwner && !isGeek));
+    document.getElementById('gsPassZone').classList.toggle('hidden', isGeek || isBuiltin);
+    document.getElementById('gsOwnerZone').classList.toggle('hidden', !(iAmOwner && !isGeek && !isBuiltin));
+    // 倍率区：仅可编辑群 + 当前用户是群主时显示
+    var showRates = !!gsData.ratesEditable && iAmOwner;
+    document.getElementById('gsRateZone').classList.toggle('hidden', !showRates);
+    if (showRates) {
+      document.getElementById('gsFileRate').value = gsData.fileRate;
+      document.getElementById('gsMsgRate').value = gsData.msgRate;
+      document.getElementById('gsDefFile').textContent = gsData.defaultFileRate;
+      document.getElementById('gsDefMsg').textContent = gsData.defaultMsgRate;
+    }
     gsErr.textContent = '';
 
     // 加群密码展示 / 编辑
@@ -3296,8 +3495,8 @@
         mu.textContent = '🔇 禁言至 ' + (m.mutedUntil || '').slice(0, 16).replace('T', ' ');
         row.appendChild(mu);
       }
-      var canMute = !isGeek && !m.isOwner && m.role !== 'admin' && m.role !== 'root-admin' && (iAmOwner || iAmAdmin) && m.username !== me;
-      var canKick = iAmOwner && !isGeek && !m.isOwner && m.role !== 'root-admin' && m.username !== me;
+      var canMute = !isGeek && !isBuiltin && !m.isOwner && m.role !== 'admin' && m.role !== 'root-admin' && (iAmOwner || iAmAdmin) && m.username !== me;
+      var canKick = iAmOwner && !isGeek && !isBuiltin && !m.isOwner && m.role !== 'root-admin' && m.username !== me;
       var canTransfer = iAmOwner && !isGeek && m.username !== me;
       if (canMute) {
         var mb = document.createElement('button');
@@ -3347,6 +3546,20 @@
     renderGroupSettings();
   });
   function passEditHide() { document.getElementById('gsPassEdit').style.display = 'none'; }
+
+  document.getElementById('btnSaveRates').addEventListener('click', async function () {
+    var fr = parseFloat(document.getElementById('gsFileRate').value);
+    var mr = parseFloat(document.getElementById('gsMsgRate').value);
+    if (!isFinite(fr) || !isFinite(mr) || fr < 0 || mr < 0 || fr > 100000 || mr > 100000) {
+      gsErr.textContent = '倍率须为 0 - 100000 的数字（0 = 免费）'; return;
+    }
+    var r = await api('/api/rooms/rates', { id: currentRoom, fileRate: fr, msgRate: mr });
+    if (!r.ok) { gsErr.textContent = r.data.error || '保存失败'; return; }
+    gsData.fileRate = r.data.fileRate; gsData.msgRate = r.data.msgRate;
+    gsErr.textContent = '';
+    appendSys('已设置本群收费倍率：文件 ' + r.data.fileRate + ' Credits/MB，发言 ' + r.data.msgRate + ' Credits/20字');
+    renderGroupSettings();
+  });
 
   document.getElementById('btnDisbandGroup').addEventListener('click', async function () {
     if (!confirm('⚠ 确定解散该群聊？所有成员将被移出，群聊消息不可恢复！')) return;
@@ -3562,6 +3775,29 @@
     }
   }
 
+  // 市场购买：接收方式自定义弹窗（.zip 时额外显示「上传至ZIP解压缩工具」）
+  var mktDeliverModal = document.getElementById('mktDeliverModal');
+  var mktDeliverResolve = null;
+  function chooseMktDeliver(name, isZip, hasCloud) {
+    return new Promise(function (resolve) {
+      mktDeliverResolve = resolve;
+      document.getElementById('mktDeliverInfo').textContent = '「' + name + '」买下后怎么接收？' + (isZip ? '（这是 ZIP 压缩包，可直接送进解压缩工具）' : '');
+      document.getElementById('mktDelZip').classList.toggle('hidden', !isZip);
+      var cloudBtn = document.getElementById('mktDelCloud');
+      cloudBtn.disabled = !hasCloud;
+      cloudBtn.textContent = hasCloud ? '☁ 存入我的云空间' : '☁ 存入我的云空间（云空间不足，已锁定）';
+      mktDeliverModal.classList.remove('hidden');
+    });
+  }
+  function finishMktDeliver(choice) {
+    mktDeliverModal.classList.add('hidden');
+    if (mktDeliverResolve) { var r = mktDeliverResolve; mktDeliverResolve = null; r(choice); }
+  }
+  document.getElementById('mktDelLocal').addEventListener('click', function () { finishMktDeliver('download'); });
+  document.getElementById('mktDelCloud').addEventListener('click', function () { if (!this.disabled) finishMktDeliver('cloud'); });
+  document.getElementById('mktDelZip').addEventListener('click', function () { finishMktDeliver('zip'); });
+  document.getElementById('mktDelCancel').addEventListener('click', function () { finishMktDeliver(null); });
+
   function renderMarket(items) {
     if (!mktList) return;
     mktList.innerHTML = '';
@@ -3639,28 +3875,25 @@
         buy.textContent = '⬛ 购买（' + it.price + ' Credits）';
         buy.addEventListener('click', async function () {
           if (!confirm('花 ' + it.price + ' Credits 购买「' + it.name + '」？')) return;
+          // 云空间是否可用（不足则锁定「存入云空间」）
+          var hasCloud = false;
+          try {
+            var cs = await api('/api/cloud/status');
+            if (cs.ok) {
+              var st = cs.data;
+              hasCloud = (st.isRA || (st.kind === 'paid' && !st.expired) || (st.kind === 'free' && !st.expired)) && (st.totalMb - st.usedMb) > 0;
+            }
+          } catch (e) {}
+          var isZip = it.kind === 'zip' || /\.zip$/i.test(it.name || '');
+          // 接收方式弹窗：.zip 时额外显示「上传至ZIP解压缩工具」
+          var choice = await chooseMktDeliver(it.name, isZip, hasCloud);
+          if (!choice) return; // 取消购买
           buy.disabled = true;
-          var pb = uploadProgressBar('购买并下载：' + it.name);
+          var pb = uploadProgressBar('购买并接收：' + it.name);
           pb.indeterminate();
           try {
-            // 先问买家要「存云空间」还是「直接下载到本机」
-            var hasCloud = false;
-            try {
-              var cs = await api('/api/cloud/status');
-              if (cs.ok) {
-                var st = cs.data;
-                hasCloud = (st.isRA || (st.kind === 'paid' && !st.expired)) && (st.totalMb - st.usedMb) > 0;
-              }
-            } catch (e) {}
-            var deliver = 'download';
-            if (hasCloud) {
-              var c = confirm(
-                '「' + it.name + '」买下后怎么接收？\n\n' +
-                '【确定】= 保存到你的云空间（可随时再下载）\n' +
-                '【取消】= 直接下载到本机（不占用云空间）'
-              );
-              deliver = c ? 'cloud' : 'download';
-            }
+            // zip 与 download 都让后端暂留文件，好把字节交给前端；cloud 由后端直接转存云空间
+            var deliver = choice === 'cloud' ? 'cloud' : 'download';
             var rr = await api('/api/market/buy', { id: it.id, deliver: deliver });
             if (!rr.ok) { pb.fail(rr.status, rr.data.error || '购买失败'); buy.disabled = false; return; }
             appendSys('购买成功：' + it.name + '（已付 ' + rr.data.price + '，平台手续费 ' + rr.data.fee + '，卖家实收 ' + rr.data.payout + '）');
@@ -3671,16 +3904,23 @@
                 var bin = atob(od.data.base64);
                 var arr = new Uint8Array(bin.length);
                 for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-                var bl = new Blob([arr], { type: od.data.mime || 'application/octet-stream' });
-                try {
-                  await saveBlobToDisk(bl, od.data.name || it.name);
-                  appendSys('已保存到本机：' + (od.data.name || it.name));
-                  // 落盘确认后清理服务器上的商品文件
+                var finalName = od.data.name || it.name;
+                if (choice === 'zip') {
+                  // 送进 ZIP 解压模式并跳转页面；字节已到手，清理服务器副本
+                  zipToolIngestZip(arr, finalName);
                   await api('/api/market/order-done', { id: rr.data.orderId });
-                  pb.done('已下载到本机：' + (od.data.name || it.name));
-                } catch (e3) {
-                  if (e3 && e3.cancelled) pb.done('已取消保存');
-                  else { pb.fail(0, '保存失败'); appendSys('购买成功，但文件保存失败：' + (e3.message || '未知错误')); }
+                  pb.done('已送入 ZIP 解压缩工具：' + finalName);
+                } else {
+                  var bl = new Blob([arr], { type: od.data.mime || 'application/octet-stream' });
+                  try {
+                    await saveBlobToDisk(bl, finalName);
+                    appendSys('已保存到本机：' + finalName);
+                    await api('/api/market/order-done', { id: rr.data.orderId });
+                    pb.done('已下载到本机：' + finalName);
+                  } catch (e3) {
+                    if (e3 && e3.cancelled) pb.done('已取消保存');
+                    else { pb.fail(0, '保存失败'); appendSys('购买成功，但文件保存失败：' + (e3.message || '未知错误')); }
+                  }
                 }
               } else {
                 pb.fail(0, '文件下载失败');
@@ -3765,6 +4005,12 @@
     var f = fileEl.files && fileEl.files[0];
     var folderFiles = folderEl.files ? Array.prototype.slice.call(folderEl.files) : [];
     var blob, name, mime, kind;
+    // ZIP 工具去处④：自动带入的压缩包优先作为待上架文件（按 zip 上架，便于购买后识别）
+    var fromZipTool = false;
+    if (zipMarketPending) {
+      f = zipMarketPending.file; folderFiles = []; mktCloudId = null; fromZipTool = true;
+      document.getElementById('mktCloudChosen').textContent = '未选择云文件';
+    }
     var btn = this;
     btn.disabled = true;
     try {
@@ -3826,7 +4072,7 @@
           mktUploadErr.textContent = '文件超过 20MB 上限（' + fmtSize(f.size) + '）';
           btn.disabled = false; return;
         }
-        blob = f; name = f.name; mime = f.type || 'application/octet-stream'; kind = 'file';
+        blob = f; name = f.name; mime = f.type || 'application/octet-stream'; kind = fromZipTool ? 'zip' : 'file';
         mktUploadErr.textContent = '上传中…';
         pb = uploadProgressBar('上架上传：' + name);
         try {
@@ -3844,6 +4090,7 @@
         pb.done('已上架：' + name);
         fileEl.value = ''; folderEl.value = ''; document.getElementById('mktDesc').value = '';
         mktUploadErr.textContent = '';
+        if (fromZipTool) { zipMarketPending = null; var zh = document.getElementById('zipMarketHint'); if (zh) { zh.classList.add('hidden'); zh.textContent = ''; } }
         appendSys('已上架：' + name + '（标价 ' + price + ' Credits · 份数 ' + copies + (kind === 'zip' ? ' · 文件夹包' : '') + '）');
         loadMarket(); refreshMe();
       } else {
@@ -3873,6 +4120,238 @@
     }
     return { zipFiles: zipFiles };
   })();
+
+  // ===================== ZIP 解压缩工具 =====================
+  // 两个缓存区都是纯内存变量（页面级），不做 localStorage / 不上传服务器 → 刷新页面即消失（开发任务二）
+  var zipPackCache = [];    // 压缩输入：{ path, top, data:Uint8Array, size }
+  var zipUnpackCache = [];  // 解压结果：{ name, data:Uint8Array, size }
+  var zipResult = null;     // 压缩产物：{ name, blob, size }
+  var zipRepostTarget = null; // 当前待转载对象：{ name, blob, size }
+  var zipMarketPending = null; // 去处④：自动带入市场待上架的 zip File
+  var zipPanelEl = document.getElementById('zipPanel');
+
+  function zipBytesToBlob(u8, mime) { return new Blob([u8], { type: mime || 'application/octet-stream' }); }
+  function zipUnique(map, path) {
+    if (!map[path]) return path;
+    var dot = path.lastIndexOf('.'), base = dot > 0 ? path.slice(0, dot) : path, ext = dot > 0 ? path.slice(dot) : '';
+    for (var i = 2; i < 9999; i++) { var k = base + '-' + i + ext; if (!map[k]) return k; }
+    return path + '-' + Date.now().toString(36);
+  }
+  function zipRow(name, size, ops) {
+    var row = document.createElement('div'); row.className = 'cf-row';
+    var nm = document.createElement('span'); nm.className = 'cf-name'; nm.textContent = name;
+    var sz = document.createElement('span'); sz.className = 'cf-size'; sz.textContent = fmtSize(size);
+    row.appendChild(nm); row.appendChild(sz);
+    (ops || []).forEach(function (o) {
+      var b = document.createElement('button');
+      b.className = 'btn small' + (o.magenta ? ' magenta' : '');
+      b.textContent = o.label;
+      b.addEventListener('click', o.cb);
+      row.appendChild(b);
+    });
+    return row;
+  }
+
+  // ---- 压缩模式 ----
+  function renderZipPack() {
+    var box = document.getElementById('zipPackList');
+    document.getElementById('zipPackCount').textContent = String(zipPackCache.length);
+    box.innerHTML = '';
+    if (!zipPackCache.length) { box.innerHTML = '<div class="zip-empty">还没有文件，先上传</div>'; return; }
+    zipPackCache.forEach(function (it, idx) {
+      box.appendChild(zipRow((it.top ? '📁 ' : '') + it.path, it.size, [
+        { label: '移除', magenta: true, cb: function () { zipPackCache.splice(idx, 1); renderZipPack(); } }
+      ]));
+    });
+  }
+  async function zipAddFiles(fileList, isFolder) {
+    var err = document.getElementById('zipPackErr'); err.textContent = '';
+    for (var i = 0; i < fileList.length; i++) {
+      var f = fileList[i];
+      var path = (isFolder && f.webkitRelativePath) ? f.webkitRelativePath : f.name;
+      var top = (isFolder && f.webkitRelativePath && f.webkitRelativePath.indexOf('/') > 0)
+        ? f.webkitRelativePath.split('/')[0] : null;
+      zipPackCache.push({ path: path, top: top, data: new Uint8Array(await f.arrayBuffer()), size: f.size });
+    }
+    renderZipPack();
+  }
+  document.getElementById('zipPackFiles').addEventListener('change', async function (e) {
+    await zipAddFiles(Array.prototype.slice.call(e.target.files || []), false); e.target.value = '';
+  });
+  document.getElementById('zipPackFolders').addEventListener('change', async function (e) {
+    await zipAddFiles(Array.prototype.slice.call(e.target.files || []), true); e.target.value = '';
+  });
+  document.getElementById('zipPackClear').addEventListener('click', function () { zipPackCache = []; renderZipPack(); });
+  document.getElementById('zipPackGo').addEventListener('click', function () {
+    var err = document.getElementById('zipPackErr'); err.textContent = '';
+    if (!zipPackCache.length) { err.textContent = '缓存区为空，请先上传文件或文件夹'; return; }
+    if (!window.fflate) { err.textContent = '打包引擎未加载，请刷新页面'; return; }
+    var name = (document.getElementById('zipPackName').value || '').trim() || '打包.zip';
+    if (!/\.zip$/i.test(name)) name += '.zip';
+    var tops = {}, nTops = 0;
+    zipPackCache.forEach(function (it) { if (it.top && !tops[it.top]) { tops[it.top] = 1; nTops++; } });
+    // 多个文件夹 → 新建根目录，把各文件夹原样装进去；单个文件夹 / 纯文件则保留原结构
+    var root = name.replace(/\.zip$/i, '') || '打包';
+    var map = {};
+    zipPackCache.forEach(function (it) {
+      var p = nTops >= 2 ? root + '/' + it.path : it.path;
+      p = zipUnique(map, p);
+      map[p] = it.data;
+    });
+    var pb = uploadProgressBar('压缩中：' + name); pb.indeterminate();
+    try {
+      var zipped = window.fflate.zipSync(map, { level: 6 });
+      zipResult = { name: name, blob: zipBytesToBlob(zipped, 'application/zip'), size: zipped.byteLength };
+      pb.done('压缩完成：' + name);
+      openZipDest();
+    } catch (ex) { err.textContent = '压缩失败：' + (ex && ex.message ? ex.message : '未知错误'); pb.fail(0, '压缩失败'); }
+  });
+
+  // ---- 解压模式 ----
+  function renderZipUnpack() {
+    var box = document.getElementById('zipUnpackList');
+    document.getElementById('zipUnpackCount').textContent = String(zipUnpackCache.length);
+    box.innerHTML = '';
+    if (!zipUnpackCache.length) { box.innerHTML = '<div class="zip-empty">还没有解压结果</div>'; return; }
+    zipUnpackCache.forEach(function (it) {
+      // 无删除按钮：解压缓存区只能「下载」「转载」，刷新后消失（无第 4 个去处）
+      box.appendChild(zipRow(it.name, it.size, [
+        { label: '下载', cb: function () { triggerDownload(zipBytesToBlob(it.data), it.name); } },
+        { label: '转载', cb: function () { openZipRepost({ name: it.name, blob: zipBytesToBlob(it.data), size: it.size }); } }
+      ]));
+    });
+  }
+  function zipIngest(u8) {
+    if (!window.fflate) throw new Error('解压引擎未加载，请刷新页面');
+    var out = window.fflate.unzipSync(u8);
+    var keys = Object.keys(out);
+    if (!keys.length) throw new Error('压缩包里没有文件');
+    zipUnpackCache = [];
+    keys.forEach(function (k) { if (!/\/$/.test(k)) zipUnpackCache.push({ name: k, data: out[k], size: out[k].byteLength }); });
+    renderZipUnpack();
+    return zipUnpackCache.length;
+  }
+  // 全局入口：市场购买 / 群聊购买的 .zip 送进解压模式并跳转页面
+  function zipToolIngestZip(bytes, name) {
+    try {
+      var n = zipIngest(new Uint8Array(bytes));
+      zipSwitch('unpack');
+      showZipPanel();
+      document.getElementById('zipUnpackErr').textContent = '';
+      appendSys('已把「' + (name || '压缩包') + '」送入 ZIP 解压模式，解出 ' + n + ' 个文件');
+      return n;
+    } catch (ex) {
+      showZipPanel(); zipSwitch('unpack');
+      document.getElementById('zipUnpackErr').textContent = '解压失败：' + (ex && ex.message ? ex.message : '未知错误');
+      return 0;
+    }
+  }
+  document.getElementById('zipUnpackFile').addEventListener('change', async function (e) {
+    var f = e.target.files && e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    var err = document.getElementById('zipUnpackErr'); err.textContent = '';
+    try { var n = zipIngest(new Uint8Array(await f.arrayBuffer())); err.textContent = '解压完成，共 ' + n + ' 个文件'; }
+    catch (ex) { err.textContent = '解压失败：' + (ex && ex.message ? ex.message : '未知错误'); }
+  });
+  document.getElementById('zipUnpackDownloadAll').addEventListener('click', function () {
+    if (!zipUnpackCache.length) { document.getElementById('zipUnpackErr').textContent = '缓存区为空'; return; }
+    zipUnpackCache.forEach(function (it) { triggerDownload(zipBytesToBlob(it.data), it.name); });
+    appendSys('已分别下载 ' + zipUnpackCache.length + ' 个文件到本机');
+  });
+
+  // ---- 模式切换 / 面板 ----
+  function zipSwitch(mode) {
+    var pack = mode === 'pack';
+    document.getElementById('zipPackView').classList.toggle('hidden', !pack);
+    document.getElementById('zipUnpackView').classList.toggle('hidden', pack);
+    document.getElementById('zipTabPack').classList.toggle('on', pack);
+    document.getElementById('zipTabUnpack').classList.toggle('on', !pack);
+  }
+  document.getElementById('zipTabPack').addEventListener('click', function () { zipSwitch('pack'); });
+  document.getElementById('zipTabUnpack').addEventListener('click', function () { zipSwitch('unpack'); });
+  function showZipPanel() { showOnly(zipPanelEl); }
+  document.getElementById('btnNavZip').addEventListener('click', showZipPanel);
+  document.getElementById('btnZipBack').addEventListener('click', function () { showOnly(chatPanel); });
+
+  // ---- 压缩结果：4 个去处 ----
+  var zipDestModal = document.getElementById('zipDestModal');
+  async function openZipDest() {
+    var info = document.getElementById('zipDestInfo');
+    var err = document.getElementById('zipDestErr'); err.textContent = '';
+    info.textContent = '「' + zipResult.name + '」（' + fmtSize(zipResult.size) + '）已压缩完成，选择一个去处：';
+    var cloudBtn = document.getElementById('zipDestCloud');
+    cloudBtn.disabled = true; cloudBtn.textContent = '② 转载至我的云存储';
+    zipDestModal.classList.remove('hidden');
+    try {
+      var r = await api('/api/cloud/status');
+      var s = r.data || {};
+      var has = s.isRA || (s.kind === 'paid' && !s.expired) || (s.kind === 'free' && !s.expired);
+      var left = Math.max(0, (Number(s.totalMb) || 0) - (Number(s.usedMb) || 0)) * 1024 * 1024;
+      if (has && left >= zipResult.size) { cloudBtn.disabled = false; cloudBtn.textContent = '② 转载至我的云存储'; }
+      else { cloudBtn.textContent = '② 转载至我的云存储（云空间不足，已锁定）'; }
+    } catch (e) { cloudBtn.textContent = '② 转载至我的云存储（无法确认空间，已锁定）'; }
+  }
+  document.getElementById('zipDestClose').addEventListener('click', function () { zipDestModal.classList.add('hidden'); });
+  document.getElementById('zipDestRoom').addEventListener('click', function () {
+    zipDestModal.classList.add('hidden'); openZipRepost(zipResult);
+  });
+  document.getElementById('zipDestCloud').addEventListener('click', async function () {
+    if (this.disabled || !zipResult) return;
+    zipDestModal.classList.add('hidden');
+    await uploadCloudBlob(zipResult.blob, zipResult.name, 'application/zip');
+  });
+  document.getElementById('zipDestLocal').addEventListener('click', function () {
+    if (!zipResult) return;
+    saveBlobToDisk(zipResult.blob, zipResult.name).catch(function () {});
+    zipDestModal.classList.add('hidden');
+  });
+  document.getElementById('zipDestMarket').addEventListener('click', function () {
+    if (!zipResult) return;
+    zipMarketPending = { file: new File([zipResult.blob], zipResult.name, { type: 'application/zip' }), name: zipResult.name };
+    zipDestModal.classList.add('hidden');
+    showShopPanel();
+    var hint = document.getElementById('zipMarketHint');
+    if (hint) { hint.textContent = '📦 已从 ZIP 工具自动载入「' + zipResult.name + '」，填写标价 / 份数后点上架即可'; hint.classList.remove('hidden'); }
+    appendSys('已把「' + zipResult.name + '」带入文件资源商店上架栏');
+  });
+
+  // ---- 转载到群聊（压缩结果 / 解压缓存区单文件共用）----
+  var zipRepostModal = document.getElementById('zipRepostModal');
+  function zipCanSpeak(rm) {
+    if (!rm) return false;
+    if (rm.id === 'geek') return meRole === 'root-admin';
+    if (meRole === 'observer') return rm.id === 'dm:' + me;
+    return true;
+  }
+  function openZipRepost(target) {
+    zipRepostTarget = target;
+    var err = document.getElementById('zipRepostErr'); err.textContent = '';
+    document.getElementById('zipRepostInfo').textContent = '文件：' + target.name + '（' + fmtSize(target.size) + '）· 按目标群的文件发送/下载计费标准扣费';
+    var sel = document.getElementById('zipRepostRoom'); sel.innerHTML = '';
+    var list = (roomsData || []).filter(zipCanSpeak);
+    list.forEach(function (rm) {
+      var o = document.createElement('option'); o.value = rm.id; o.textContent = rm.name; sel.appendChild(o);
+    });
+    if (!list.length) err.textContent = '没有可发言的群聊';
+    zipRepostModal.classList.remove('hidden');
+  }
+  document.getElementById('zipRepostCancel').addEventListener('click', function () { zipRepostModal.classList.add('hidden'); });
+  document.getElementById('zipRepostConfirm').addEventListener('click', async function () {
+    var room = document.getElementById('zipRepostRoom').value;
+    var err = document.getElementById('zipRepostErr');
+    if (!zipRepostTarget || !room) { err.textContent = '请选择目标群聊'; return; }
+    var btn = this; btn.disabled = true; err.textContent = '';
+    try {
+      var u = '/api/zip/repost?room=' + encodeURIComponent(room) + '&name=' + encodeURIComponent(zipRepostTarget.name) + '&mime=application/zip';
+      var res = await fetch(u, { method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: zipRepostTarget.blob });
+      var data = {}; try { data = await res.json(); } catch (e) {}
+      if (!res.ok) { err.textContent = data.error || ('转载失败（HTTP ' + res.status + '）'); btn.disabled = false; return; }
+      zipRepostModal.classList.add('hidden');
+      appendSys('已转载到群聊（扣除 ' + (data.cost || 0) + ' Credits）');
+      refreshMe();
+    } catch (e) { err.textContent = '网络错误'; }
+    btn.disabled = false;
+  });
 
   // ===== 带进度上报的上传（XHR 才能拿到上传进度；失败直接抛出 HTTP 状态码，便于上报 500/503）=====
   function uploadWithProgress(url, body, headers, onProgress) {
@@ -4110,7 +4589,7 @@
   }
   function openRepost(id, name, size) {
     repostFileId = id;
-    document.getElementById('repostText').textContent = '文件：' + name + '（' + fmtSize(size) + '）· 转载按 1MB/20Credits 扣费';
+    document.getElementById('repostText').textContent = '文件：' + name + '（' + fmtSize(size) + '）· 转载按目标群的文件计费标准扣费';
     document.getElementById('repostErr').textContent = '';
     var sel = document.getElementById('repostRoom');
     sel.innerHTML = '';
