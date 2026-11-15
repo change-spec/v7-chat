@@ -1080,6 +1080,10 @@ export const html = `<!DOCTYPE html>
       <div class="tool-row" id="roomJoinerBtns" style="display:none">
         <span class="hint" style="margin:0">已就座 · 等待房主开始棋局…</span>
       </div>
+      <div class="tool-row" id="roomOwnerBtns" style="display:none">
+        <button class="btn small" id="btnGameDelete">🗑 删除房间</button>
+        <span class="hint" style="margin:0">删除后房间号立即释放，别人再加入会提示「房间不存在」</span>
+      </div>
       <div class="tool-row"><button class="btn small" id="btnRoomLeave">▸ 离开房间页</button></div>
     </div>
 
@@ -2562,6 +2566,27 @@ export const html = `<!DOCTYPE html>
           setRoomStatus('ended');
           if (currentGame.type !== 'match3') cbOnEnd(d.winner, d.result);
           else appendSys('房间已被房主结束');
+          // 房间已结束且仍停留在房间里 → 闪退回聊天页（避免卡在已结束的房间）
+          var endedRid = currentGame.roomId;
+          setTimeout(function () {
+            if (currentGame && currentGame.roomId === endedRid) {
+              appendSys('本局已结束，已返回聊天页');
+              exitGameRoom();
+            }
+          }, 2500);
+        }
+      } else if (d.type === 'game-deleted') {
+        // 房间被房主删除 → 立即退回聊天页
+        if (currentGame && d.roomId === currentGame.roomId) {
+          appendSys('房间 ' + d.roomId + ' 已被房主删除，已返回聊天页');
+          exitGameRoom();
+        }
+      } else if (d.type === 'game-leave') {
+        // 对手在开局前离开了 → 座位释放，房间回到「等待加入」
+        if (currentGame && d.roomId === currentGame.roomId && currentGame.iAmCreator) {
+          document.getElementById('roomOpponent').textContent = '';
+          setRoomStatus('waiting');
+          appendSys(d.opponent + ' 已离开房间，座位已释放');
         }
       } else if (d.type === 'presence') {
         if (d.online !== undefined) {
@@ -2766,7 +2791,34 @@ export const html = `<!DOCTYPE html>
   });
   document.getElementById('btnGameBack').addEventListener('click', function () { showGamePanel(null); });
   document.getElementById('btnPayBack').addEventListener('click', function () { payErr.textContent = ''; showGamePanel('lobby'); });
-  document.getElementById('btnRoomLeave').addEventListener('click', function () { showGamePanel(null); });
+  // 退出房间页：告知服务端释放座位（仅在还没开局时生效），然后回到聊天页
+  document.getElementById('btnRoomLeave').addEventListener('click', async function () {
+    var rid = currentGame && currentGame.roomId;
+    if (rid) {
+      try { await api('/api/game/leave', { roomId: rid }); } catch (e) {}
+    }
+    exitGameRoom();
+  });
+
+  // 统一退出到聊天页（清空对局状态 + 停掉轮询 + 切回聊天面板）
+  function exitGameRoom() {
+    if (cbPollTimer) { clearInterval(cbPollTimer); cbPollTimer = null; }
+    cb = null;
+    currentGame = null;
+    showGamePanel(null);
+  }
+
+  // 删除房间（房主）：房间号立即释放
+  document.getElementById('btnGameDelete').addEventListener('click', async function () {
+    if (!currentGame || !currentGame.iAmCreator) return;
+    var rid = currentGame.roomId;
+    try {
+      var r = await api('/api/game/delete', { roomId: rid });
+      if (!r.ok) { appendSys(r.data.error || '删除失败'); return; }
+      appendSys('房间 ' + rid + ' 已删除，房间号已释放');
+      exitGameRoom();
+    } catch (e) { appendSys('网络错误，删除失败'); }
+  });
 
   // 购买房间号：SHOP（data-shop-buy）与游戏大厅（data-game-buy）共用
   async function buyGameRoom(type) {
@@ -2867,6 +2919,7 @@ export const html = `<!DOCTYPE html>
     if (currentGame.type === 'match3') {
       creatorBtns.style.display = 'none';
       joinerBtns.style.display = 'none';
+      document.getElementById('roomOwnerBtns').style.display = 'flex';
       setRoomStatus('playing');
       showGamePanel('room');
       startMatch3();
@@ -2875,12 +2928,15 @@ export const html = `<!DOCTYPE html>
     }
     // 棋类：初始化棋盘引擎（规则判定在引擎内，局面与服务端同步）
     cbInit(currentGame.type, currentGame.roomId);
+    var ownerBtns = document.getElementById('roomOwnerBtns');
     if (currentGame.iAmCreator) {
       creatorBtns.style.display = 'flex';
       joinerBtns.style.display = 'none';
+      ownerBtns.style.display = 'flex';
     } else {
       creatorBtns.style.display = 'none';
       joinerBtns.style.display = 'flex';
+      ownerBtns.style.display = 'none';
     }
     setRoomStatus(status);
     showGamePanel('room');
@@ -3444,8 +3500,24 @@ export const html = `<!DOCTYPE html>
     cbPollTimer = setInterval(function () {
       if (!cb || cb.over || !currentGame) return;
       api('/api/game/state?roomId=' + encodeURIComponent(cb.roomId)).then(function (r) {
+        // 房间已被删除（404）→ 退出回聊天页，别把用户困在空房间里
+        if (r.status === 404) {
+          appendSys('房间已被删除，已返回聊天页');
+          exitGameRoom();
+          return;
+        }
         if (!r.ok || !r.data || !r.data.game) return;
         var g = r.data.game;
+        // 房间已结束 → 自动闪退回聊天页（刷新页面后进来也能正确退出）
+        if (g.status === 'ended') {
+          setRoomStatus('ended');
+          if (!cb.over) {
+            if (currentGame.type !== 'match3') cbOnEnd(g.winner, g.result || '棋局结束');
+            appendSys('本局已结束，已返回聊天页');
+          }
+          exitGameRoom();
+          return;
+        }
         if (g.board && g.board !== cbLastBoard) {
           cbLastBoard = g.board;
           cb.st = cb.G.parse(g.board);

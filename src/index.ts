@@ -3195,8 +3195,11 @@ async function handleGameJoin(request: Request, env: Env): Promise<Response> {
   const row = await env.DB.prepare("SELECT id, type, creator, opponent, status FROM games WHERE id = ?").bind(id).first<{ id: string; type: string; creator: string; opponent: string | null; status: string }>();
   if (!row) return json({ error: "房间不存在，检查房间号" }, 404);
   if (row.type === "match3") return json({ error: "消消乐是单人游戏，无需加入" }, 400);
+  // ⚠️ 顺序很重要：先判状态，再判已满。
+  //    否则「已结束且仍留有 opponent 的房间」会误报「房间已满」（实际是这局已经打完了）。
+  if (row.status === "ended") return json({ error: "这局已经结束了，换个房间号吧" }, 409);
+  if (row.status === "playing") return json({ error: "房间已开局，无法加入" }, 409);
   if (row.opponent) return json({ error: "房间已满" }, 409);
-  if (row.status !== "waiting") return json({ error: "房间已开始或已结束" }, 409);
   // 房主本人（含被代购的房主）可以进自己买的房间：免费，直接进入等待界面
   if (row.creator === user.username) {
     return json({ ok: true, roomId: id, type: row.type, creator: row.creator, self: true });
@@ -3377,6 +3380,65 @@ async function handleGameEnd(request: Request, env: Env): Promise<Response> {
   return json({ ok: true });
 }
 
+// 删除房间：房主可删除自己的房间（任意状态，含已结束）
+// 作用：房间打完后能把房间号释放掉，避免「这局早就结束了却一直显示已满、还删不掉」。
+async function handleGameDelete(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  let body: { roomId?: string };
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "请求格式错误" }, 400);
+  }
+  const id = (body.roomId || "").trim().toUpperCase();
+  const row = await env.DB.prepare("SELECT id, type, creator, opponent, status FROM games WHERE id = ?").bind(id).first<{ id: string; type: string; creator: string; opponent: string | null; status: string }>();
+  if (!row) return json({ error: "房间不存在" }, 404);
+  if (row.creator !== user.username) return json({ error: "只有房主可以删除房间" }, 403);
+  // 消消乐是单人局，房主就是唯一玩家，直接删
+  // 棋类：双方都同意才能删，避免对手还在房里却被强行踢出
+  if (row.opponent && row.status !== "ended") {
+    return json({ error: "对手还在房间里，等这局结束或让对手先离开再删除" }, 409);
+  }
+  await env.DB.prepare("DELETE FROM games WHERE id = ?").bind(id).run();
+  await env.DB.prepare("DELETE FROM game_requests WHERE room_id = ?").bind(id).run();
+  await notifyUsers(env, [row.creator, row.opponent].filter(Boolean) as string[],
+    { type: "game-deleted", roomId: id });
+  return json({ ok: true });
+}
+
+// 离开房间：对局尚未开始时，退出即释放座位（否则房间号一直显示「已满」）
+async function handleGameLeave(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  let body: { roomId?: string };
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "请求格式错误" }, 400);
+  }
+  const id = (body.roomId || "").trim().toUpperCase();
+  const row = await env.DB.prepare("SELECT id, creator, opponent, status FROM games WHERE id = ?").bind(id).first<{ id: string; creator: string; opponent: string | null; status: string }>();
+  if (!row) return json({ error: "房间不存在" }, 404);
+  // 对手离开：释放座位，房间回到「等待加入」
+  // ⚠️ 状态要覆盖 waiting 与 ready 两种：对手付完钱后房间已转为 ready，
+  //    此时对手离开同样应释放座位，否则房间号会一直卡在「已满」。
+  if (row.opponent === user.username && (row.status === "waiting" || row.status === "ready")) {
+    await env.DB.prepare("UPDATE games SET opponent = NULL, payer = NULL, status = 'waiting' WHERE id = ?").bind(id).run();
+    await notifyUsers(env, [row.creator], { type: "game-leave", roomId: id, opponent: user.username });
+    return json({ ok: true, released: true });
+  }
+  // 房主离开：直接删掉还没开的房间
+  if (row.creator === user.username && (row.status === "waiting" || row.status === "ready")) {
+    await env.DB.prepare("DELETE FROM games WHERE id = ?").bind(id).run();
+    await env.DB.prepare("DELETE FROM game_requests WHERE room_id = ?").bind(id).run();
+    await notifyUsers(env, [row.opponent].filter(Boolean) as string[], { type: "game-deleted", roomId: id });
+    return json({ ok: true });
+  }
+  // 对局中/已结束：只让前端退出页面，不动数据
+  return json({ ok: true, released: false });
+}
+
 // 游戏费率查询：前端用它渲染价格文案，保证「看到的价」=「实际扣的价」
 async function handleGameFees(request: Request, env: Env): Promise<Response> {
   return json({ ok: true, fees: GAME_FEES });
@@ -3446,6 +3508,8 @@ export default {
     if (url.pathname === "/api/game/end" && request.method === "POST") return handleGameEnd(request, env);
     if (url.pathname === "/api/game/state" && request.method === "GET") return handleGameState(request, env);
     if (url.pathname === "/api/game/fees" && request.method === "GET") return handleGameFees(request, env);
+    if (url.pathname === "/api/game/delete" && request.method === "POST") return handleGameDelete(request, env);
+    if (url.pathname === "/api/game/leave" && request.method === "POST") return handleGameLeave(request, env);
     if (url.pathname === "/api/rooms" && request.method === "GET") return handleRoomsList(request, env);
     if (url.pathname === "/api/rooms/create" && request.method === "POST") return handleRoomCreate(request, env);
     if (url.pathname === "/api/rooms/history" && request.method === "GET") return handleRoomHistory(request, env);
