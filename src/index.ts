@@ -1368,6 +1368,19 @@ async function notifyRoom(env: Env, obj: unknown): Promise<void> {
   } catch {}
 }
 
+// 定向通知指定用户（对弈走子/结算只发给对局双方）
+async function notifyUsers(env: Env, users: string[], payload: unknown): Promise<void> {
+  try {
+    const roomId = env.ROOM.idFromName("main");
+    const room = env.ROOM.get(roomId);
+    await room.fetch(new Request("http://do/notify-users", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ users, payload })
+    }));
+  } catch {}
+}
+
 // ===== 群设置：成员列表 / 加群密码 / 转让 / 踢人 / 禁言 / 解散 =====
 async function getRoomRow(env: Env, id: string): Promise<{ id: string; name: string; type: string; creator: string; passcode: string | null } | null> {
   return await env.DB.prepare("SELECT id, name, type, creator, passcode FROM rooms WHERE id = ?").bind(id)
@@ -3121,12 +3134,44 @@ async function handleGameCreate(request: Request, env: Env): Promise<Response> {
 }
 
 
-// ===== SHOP：购买房间号（唯一建房入口；消消乐暂时故障，扣费后不开局）=====
+// ===== SHOP：购买房间号（唯一建房入口）=====
+// 游戏引擎已修复并重新开放：消消乐为单人局（直接开房即玩），
+// 国际象棋 / 中国象棋为真人对战（开房后把房间号发给好友，人齐了开局）。
 async function handleShopBuy(request: Request, env: Env): Promise<Response> {
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
-  // SHOP 已关闭：所有游戏均提示故障，不售卖房间号（不扣费），游戏引擎不动
-  return json({ error: "游戏故障 · SHOP 暂停售卖房间号，已购房间号仍可正常加入" }, 503);
+  let body: { type?: string };
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "请求格式错误" }, 400);
+  }
+  const type = (body.type || "").trim();
+  if (type !== "match3" && type !== "chess" && type !== "xiangqi") {
+    return json({ error: "未知的游戏类型" }, 400);
+  }
+  const fee = type === "match3" ? MATCH3_FEE : GAME_FEE;
+  // 先扣费再建房：扣费失败不留残局
+  if (!(await spendCredits(env, user.username, fee))) {
+    return json({ error: "Credits 不足，开局需要 " + fee + " Credits" }, 402);
+  }
+  await logCredits(env, user.username, -fee, type === "match3" ? "消消乐开局" : "对弈开局");
+  // 房间号：6 位大写字母数字（去掉易混的 I/O/0/1）
+  let id = "";
+  for (let attempt = 0; attempt < 5; attempt++) {
+    id = genRoomId();
+    const exists = await env.DB.prepare("SELECT id FROM games WHERE id = ?").bind(id).first();
+    if (!exists) break;
+    id = "";
+  }
+  if (!id) return json({ error: "房间号生成失败，请重试" }, 500);
+  const now = new Date().toISOString();
+  // 消消乐是单人局：直接进入 playing；棋类等对手加入后再由房主开局
+  const status = type === "match3" ? "playing" : "waiting";
+  await env.DB.prepare(
+    "INSERT INTO games (id, type, creator, opponent, status, payer, board, turn, winner, created_at) VALUES (?, ?, ?, NULL, ?, ?, NULL, NULL, NULL, ?)"
+  ).bind(id, type, user.username, status, "self", now).run();
+  return json({ ok: true, roomId: id, type: type, fee: fee });
 }
 
 async function handleGameJoin(request: Request, env: Env): Promise<Response> {
@@ -3173,7 +3218,7 @@ async function handleGamePaySelf(request: Request, env: Env): Promise<Response> 
   }
   if (!keyActive) await logCredits(env, user.username, -GAME_FEE, "加入对弈房间");
   await env.DB.prepare("UPDATE games SET opponent = ?, payer = ?, status = 'ready' WHERE id = ?").bind(user.username, keyActive ? "apikey" : "self", id).run();
-  await notifyRoom(env, { type: "game-join", roomId: id, opponent: user.username, payer: keyActive ? "apikey" : "self" });
+  await notifyUsers(env, [row.creator, user.username], { type: "game-join", roomId: id, opponent: user.username, payer: keyActive ? "apikey" : "self" });
   return json({ ok: true, roomId: id });
 }
 
@@ -3202,7 +3247,7 @@ async function handleGamePayRequest(request: Request, env: Env): Promise<Respons
     "INSERT INTO game_requests (room_id, from_user, kind, status, created_at) VALUES (?, ?, 'pay_for_me', 'pending', ?)"
   ).bind(id, user.username, now).run();
   const requestId = ins.meta.last_row_id;
-  await notifyRoom(env, { type: "game-invite", requestId: requestId, roomId: id, from: user.username, gameType: row.type });
+  await notifyUsers(env, [row.creator], { type: "game-invite", requestId: requestId, roomId: id, from: user.username, gameType: row.type });
   return json({ ok: true, requestId: requestId });
 }
 
@@ -3225,7 +3270,7 @@ async function handleGamePayRespond(request: Request, env: Env): Promise<Respons
 
   if (!body.accept) {
     await env.DB.prepare("UPDATE game_requests SET status = 'rejected' WHERE id = ?").bind(reqId).run();
-    await notifyRoom(env, { type: "game-respond", requestId: reqId, roomId: req.room_id, accepted: false });
+    await notifyUsers(env, [game.creator, req.from_user], { type: "game-respond", requestId: reqId, roomId: req.room_id, accepted: false });
     return json({ ok: true, rejected: true });
   }
   if (game.opponent) {
@@ -3238,8 +3283,8 @@ async function handleGamePayRespond(request: Request, env: Env): Promise<Respons
   await logCredits(env, user.username, -GAME_FEE, "代付好友对弈费");
   await env.DB.prepare("UPDATE game_requests SET status = 'accepted' WHERE id = ?").bind(reqId).run();
   await env.DB.prepare("UPDATE games SET opponent = ?, payer = ?, status = 'ready' WHERE id = ?").bind(req.from_user, user.username, req.room_id).run();
-  await notifyRoom(env, { type: "game-join", roomId: req.room_id, opponent: req.from_user, payer: user.username });
-  await notifyRoom(env, { type: "game-respond", requestId: reqId, roomId: req.room_id, accepted: true });
+  await notifyUsers(env, [game.creator, req.from_user], { type: "game-join", roomId: req.room_id, opponent: req.from_user, payer: user.username });
+  await notifyUsers(env, [game.creator, req.from_user], { type: "game-respond", requestId: reqId, roomId: req.room_id, accepted: true });
   return json({ ok: true });
 }
 
@@ -3253,31 +3298,72 @@ async function handleGameStart(request: Request, env: Env): Promise<Response> {
     return json({ error: "请求格式错误" }, 400);
   }
   const id = (body.roomId || "").trim().toUpperCase();
-  const row = await env.DB.prepare("SELECT id, type, creator, opponent, status FROM games WHERE id = ?").bind(id).first<{ type: string; creator: string; opponent: string | null; status: string }>();
+  const row = await env.DB.prepare("SELECT id, type, creator, opponent, status FROM games WHERE id = ?").bind(id).first<{ id: string; type: string; creator: string; opponent: string | null; status: string }>();
   if (!row) return json({ error: "房间不存在" }, 404);
   if (row.creator !== user.username) return json({ error: "只有房主可以开始棋局" }, 403);
   if (!row.opponent || row.status !== "ready") return json({ error: "等待对手加入并完成支付" }, 409);
-  await env.DB.prepare("UPDATE games SET status = 'playing' WHERE id = ?").bind(id).run();
-  await notifyRoom(env, { type: "game-start", roomId: id, gameType: row.type });
-  return json({ ok: true });
+  // 写入初始局面：房主执白（国际象棋）/ 红（中国象棋）
+  const startFen = row.type === "xiangqi"
+    ? "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR r"
+    : "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+  await env.DB.prepare("UPDATE games SET status = 'playing', board = ?, turn = ? WHERE id = ?")
+    .bind(startFen, row.creator, id).run();
+  await notifyUsers(env, [row.creator, row.opponent].filter(Boolean) as string[],
+    { type: "game-start", roomId: id, gameType: row.type, board: startFen, turn: row.creator });
+  return json({ ok: true, board: startFen });
 }
 
-async function handleGameEnd(request: Request, env: Env): Promise<Response> {
+// 走子：服务端负责「轮次 / 身份 / 状态」校验与广播，规则判定由前端棋类引擎完成
+async function handleGameMove(request: Request, env: Env): Promise<Response> {
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
-  let body: { roomId?: string };
+  let body: { roomId?: string; board?: string };
   try {
     body = await request.json();
   } catch {
     return json({ error: "请求格式错误" }, 400);
   }
   const id = (body.roomId || "").trim().toUpperCase();
-  const row = await env.DB.prepare("SELECT id, creator, status FROM games WHERE id = ?").bind(id).first<{ creator: string; status: string }>();
+  const row = await env.DB.prepare("SELECT id, type, creator, opponent, status, board, turn FROM games WHERE id = ?")
+    .bind(id).first<{ id: string; type: string; creator: string; opponent: string | null; status: string; board: string | null; turn: string | null }>();
+  if (!row) return json({ error: "房间不存在" }, 404);
+  if (row.status !== "playing") return json({ error: "棋局尚未开始或已结束" }, 409);
+  if (row.creator !== user.username && row.opponent !== user.username) {
+    return json({ error: "你不是这局棋的参与者" }, 403);
+  }
+  // 轮次校验：只有轮到自己才能走
+  if (row.turn && row.turn !== user.username) {
+    return json({ error: "还没轮到你走" }, 409);
+  }
+  const board = String(body.board || "").trim();
+  if (!board || board.length > 4000) return json({ error: "局面数据无效" }, 400);
+  const nextTurn = row.creator === user.username ? (row.opponent || "") : row.creator;
+  await env.DB.prepare("UPDATE games SET board = ?, turn = ? WHERE id = ?").bind(board, nextTurn, id).run();
+  await notifyUsers(env, [row.creator, row.opponent].filter(Boolean) as string[],
+    { type: "game-move", roomId: id, board: board, by: user.username, turn: nextTurn });
+  return json({ ok: true, board: board, turn: nextTurn });
+}
+
+async function handleGameEnd(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  let body: { roomId?: string; winner?: string; result?: string };
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "请求格式错误" }, 400);
+  }
+  const id = (body.roomId || "").trim().toUpperCase();
+  const row = await env.DB.prepare("SELECT id, type, creator, opponent, status FROM games WHERE id = ?").bind(id).first<{ id: string; type: string; creator: string; opponent: string | null; status: string }>();
   if (!row) return json({ error: "房间不存在" }, 404);
   if (row.creator !== user.username) return json({ error: "只有房主可以结束房间" }, 403);
   if (row.status === "ended") return json({ ok: true });
-  await env.DB.prepare("UPDATE games SET status = 'ended' WHERE id = ?").bind(id).run();
-  await notifyRoom(env, { type: "game-end", roomId: id });
+  // winner：'a' = 房主胜、'b' = 对手胜、'draw' = 和棋；缺省视为房主认输结束
+  const w = String(body.winner || "");
+  const winner = w === "b" ? (row.opponent || "") : (w === "a" ? row.creator : (w === "draw" ? "draw" : null));
+  await env.DB.prepare("UPDATE games SET status = 'ended', winner = ? WHERE id = ?").bind(winner, id).run();
+  await notifyUsers(env, [row.creator, row.opponent].filter(Boolean) as string[],
+    { type: "game-end", roomId: id, winner: winner, result: String(body.result || "") });
   return json({ ok: true });
 }
 
@@ -3287,8 +3373,8 @@ async function handleGameState(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const id = (url.searchParams.get("roomId") || "").trim().toUpperCase();
   const row = await env.DB.prepare(
-    "SELECT id, type, creator, opponent, status, payer, turn, winner FROM games WHERE id = ?"
-  ).bind(id).first<{ id: string; type: string; creator: string; opponent: string | null; status: string; payer: string | null; turn: string | null; winner: string | null }>();
+    "SELECT id, type, creator, opponent, status, payer, turn, winner, board FROM games WHERE id = ?"
+  ).bind(id).first<{ id: string; type: string; creator: string; opponent: string | null; status: string; payer: string | null; turn: string | null; winner: string | null; board: string | null }>();
   if (!row) return json({ error: "房间不存在" }, 404);
   return json({ game: row, iAm: user.username, iAmCreator: row.creator === user.username });
 }
@@ -3341,6 +3427,7 @@ export default {
     if (url.pathname === "/api/game/pay-request" && request.method === "POST") return handleGamePayRequest(request, env);
     if (url.pathname === "/api/game/pay-respond" && request.method === "POST") return handleGamePayRespond(request, env);
     if (url.pathname === "/api/game/start" && request.method === "POST") return handleGameStart(request, env);
+    if (url.pathname === "/api/game/move" && request.method === "POST") return handleGameMove(request, env);
     if (url.pathname === "/api/game/end" && request.method === "POST") return handleGameEnd(request, env);
     if (url.pathname === "/api/game/state" && request.method === "GET") return handleGameState(request, env);
     if (url.pathname === "/api/rooms" && request.method === "GET") return handleRoomsList(request, env);
@@ -3400,6 +3487,9 @@ export default {
   }
 };
 
+// socket 附件：{ id: connId, username, role }（serializeAttachment 写入，≤2048 字节，跨休眠保留）
+interface WsAttach { id?: string; username?: string; role?: string }
+
 interface RoomUser {
   username: string;
   role: string;
@@ -3435,11 +3525,28 @@ export class Room {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    // 实例可能刚从休眠/回收醒来：内存 Map 为空 → 先重建，否则
+    // 广播与定向推送都会发给「零个 socket」（对局方收不到 game-join / game-move）。
+    await this.hydrate();
 
     if (url.pathname === "/notify" && request.method === "POST") {
       try {
         const body = await request.json() as { room?: string };
         this.broadcastToRoom(body, (body && body.room) || "geek");
+      } catch {}
+      return new Response("ok");
+    }
+
+    // 定向推送：只发给指定用户（走棋广播只给对局双方，避免整局棋盘泄露给旁观者）
+    if (url.pathname === "/notify-users" && request.method === "POST") {
+      try {
+        const body = await request.json() as { users?: string[]; payload?: unknown };
+        const users = Array.isArray(body.users) ? body.users : [];
+        for (const u of users) {
+          const set = this.byUser.get(u);
+          if (!set) continue;
+          for (const sock of set) this.sendTo(sock, body.payload);
+        }
       } catch {}
       return new Response("ok");
     }
@@ -3455,10 +3562,21 @@ export class Room {
       const pair = new WebSocketPair();
       const client = pair[0];
       const server = pair[1];
-      this.state.acceptWebSocket(server);
+      // Hibernation 兼容：把身份写进 socket 附件（跨实例回收/休眠保留）。
+      // 实例内存被回收后，内存 Map 会清空，必须靠附件 + storage 才能还原会话。
+      // ⚠️ acceptWebSocket 的 tags 必须是**字符串数组**（传对象会存不进去 → 附件变 null），
+      //    且运行时返回的 WebSocketRequest 上 id 未必可用 → 这里自带 connId 作稳定键。
+      const connId = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+      // ⚠️ 关键：跨休眠保留状态要用 **ws.serializeAttachment()**（≤2048 字节），
+      //    acceptWebSocket 的第二个参数 tags 只是「查找标签」，不是附件，写那里读不回来。
+      //    附件里放 connId + 身份；房间归属（可变）放 DO storage 的 ws_meta 表。
+      this.state.acceptWebSocket(server, [connId]);
+      try { server.serializeAttachment({ id: connId, username: row.username, role: row.role }); } catch {}
       this.users.set(server, { username: row.username, role: row.role });
       if (!this.byUser.has(row.username)) this.byUser.set(row.username, new Set());
       this.byUser.get(row.username)!.add(server);
+      // 房间归属存 DO storage（可变状态，附件不可变）
+      void this.persistWsMeta(server, connId, row.username, row.role, "");
       return new Response(null, { status: 101, webSocket: client });
     }
     return json({ error: "请通过 WebSocket 连接" }, 400);
@@ -3474,8 +3592,24 @@ export class Room {
   }
 
   private async handleMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    const user = this.users.get(ws);
-    if (!user) return;
+    // 实例可能已从休眠/回收中醒来：内存 Map 被清空 → 先重建，再解析身份
+    await this.hydrate();
+    let user = this.resolveUser(ws);
+    if (!user) {
+      // 内存与附件都没拿到：再按 connId 从 storage 兜底（附件存的是 connId）
+      const cid = this.socketIdOf(ws);
+      if (cid) {
+        const u = await this.userByConnId(cid);
+        if (u) { user = u; this.users.set(ws, u); }
+      }
+    }
+    if (!user) {
+      // 实在认不出身份：明确告知并断开，客户端会自动重连并重新进房
+      // （原来此处是静默 return —— 客户端只看到「进入会话中…」直到强刷）
+      try { this.sendTo(ws, { type: "sys", text: "连接状态已重置，正在重新连接…", fatal: true }); } catch {}
+      try { ws.close(1012, "state-reset"); } catch {}
+      return;
+    }
     if (typeof message !== "string") {
       if (message instanceof ArrayBuffer) {
         // 分片前缀：[4字节 file_id 长度(uint32 BE)][file_id UTF-8][分片数据]
@@ -3529,6 +3663,7 @@ export class Room {
         return;
       }
       this.roomOf.set(ws, room);
+      void this.persistWsMeta(ws, this.socketIdOf(ws), user.username, user.role, room);
       void purgeOldMessages(this.env);
       // 历史查询按房间 class 用对应保留期：C 类 21 天 / B 类 7 天 / A 类 5 天
       const histCut = await roomRetentionCutoff(this.env, room);
@@ -3893,6 +4028,7 @@ export class Room {
   }
 
   webSocketClose(ws: WebSocket): void {
+    void this.deleteWsMeta(ws);
     const user = this.users.get(ws);
     this.users.delete(ws);
     this.roomOf.delete(ws);
@@ -3909,6 +4045,167 @@ export class Room {
 
   webSocketError(ws: WebSocket): void {
     this.users.delete(ws);
+  }
+
+  // =========================================================================
+  // WebSocket Hibernation 兼容层
+  // Cloudflare 的 DO 在空闲后会被回收/休眠：socket 仍然存活（运行时持有），
+  // 但实例的 JS 堆会被丢弃 → 本类的 users / roomOf / byUser 三个内存 Map 全部清空。
+  // 后果：handleMessage 里 users.get(ws) 得到 undefined，若静默 return 则
+  // 客户端永远收不到任何回执（表现为「进入会话中…」卡死，必须强刷才恢复）。
+  //
+  // 对策（官方 Hibernation 模式）：
+  //   ① 身份（username/role）→ 存进 socket 附件 acceptWebSocket(ws, tags)，跨回收保留
+  //   ② 房间归属（可变）      → 存进 DO storage 的 ws_meta 表
+  //   ③ 实例醒来时 hydrate()：用 getWebSockets() + 附件 + storage 重建三个内存 Map
+  // =========================================================================
+
+  private wsMetaReady = false;
+  private hydrated = false;
+
+  private async ensureWsMeta(): Promise<void> {
+    if (this.wsMetaReady) return;
+    try {
+      await this.state.storage.sql.exec(
+        "CREATE TABLE IF NOT EXISTS ws_meta (id TEXT PRIMARY KEY, username TEXT NOT NULL, role TEXT, room TEXT)"
+      );
+      this.wsMetaReady = true;
+    } catch {}
+  }
+
+  // getWebSockets() 的返回形状在不同运行时版本下不一致：
+  //   ① WebSocketRequest 包装：{ id, webSocket, deserializeAttachment }
+  //   ② 直接就是 WebSocket：{ send, close, deserializeAttachment }（无 webSocket 属性）
+  // 本项目实测为 ② —— 早前按 ① 取 s.webSocket 会得到 undefined，
+  // 导致 hydrate 重建出的 byUser 里塞进 undefined → 推送时 ws.send() 抛
+  // 「Cannot read properties of undefined (reading 'send')」→ 定向推送全部丢失。
+  private socketOf(req: unknown): WebSocket {
+    const o = req as { webSocket?: WebSocket };
+    return (o && o.webSocket ? o.webSocket : (req as WebSocket));
+  }
+
+  // 读 socket 附件（serializeAttachment 写入，跨休眠保留）
+  // ⚠️ 直接用 ws.deserializeAttachment()：不要用 getWebSockets() 里 s.webSocket === ws
+  //    做引用比对 —— 休眠醒来后运行时重建的是**新的 JS 包装对象**，引用不相等，
+  //    比对会失配 → 身份取不到 → 消息被静默丢弃（表现为「进会话失败、需强刷」）。
+  private attachOf(ws: WebSocket): WsAttach | null {
+    try {
+      const fn = (ws as unknown as { deserializeAttachment?: () => unknown }).deserializeAttachment;
+      if (typeof fn === "function") {
+        const a = fn.call(ws) as WsAttach | null;
+        if (a && a.username) return a;
+      }
+    } catch {}
+    // 兜底：按运行时 socket 列表找一遍（此时无法用引用比对，改用附件 id 比对）
+    try {
+      for (const req of this.state.getWebSockets()) {
+        const sock = this.socketOf(req);
+        const a = req.deserializeAttachment() as WsAttach | null;
+        if (a && a.username && sock === ws) return a;
+      }
+    } catch {}
+    return null;
+  }
+
+  // 取 socket 的稳定键 connId（存在附件里，跨回收不变）
+  private socketIdOf(ws: WebSocket): string {
+    const a = this.attachOf(ws);
+    return a && a.id ? a.id : "";
+  }
+
+  private async persistWsMeta(ws: WebSocket, connId: string, username: string, role: string, room: string): Promise<void> {
+    try {
+      await this.ensureWsMeta();
+      const id = connId || this.socketIdOf(ws);
+      if (!id) return;
+      await this.state.storage.sql.exec(
+        "INSERT INTO ws_meta (id, username, role, room) VALUES (?, ?, ?, ?) " +
+        "ON CONFLICT(id) DO UPDATE SET username = excluded.username, role = excluded.role, room = excluded.room",
+        id, username, role || "", room || ""
+      );
+    } catch {}
+  }
+
+  private async deleteWsMeta(ws: WebSocket): Promise<void> {
+    try {
+      await this.ensureWsMeta();
+      const id = this.socketIdOf(ws);
+      if (!id) return;
+      await this.state.storage.sql.exec("DELETE FROM ws_meta WHERE id = ?", id);
+    } catch {}
+  }
+
+  // 解析 socket 的用户：内存缓存优先，miss 时从 socket 附件还原（跨回收保留）
+  private resolveUser(ws: WebSocket): RoomUser | null {
+    const cached = this.users.get(ws);
+    if (cached) return cached;
+    const a = this.attachOf(ws);
+    if (a && a.username) {
+      const user: RoomUser = { username: a.username, role: a.role || "" };
+      this.users.set(ws, user);
+      return user;
+    }
+    return null;
+  }
+
+  // 从 ws_meta（DO storage）按 connId 读回身份；供实例醒来后还原
+  private async userByConnId(connId: string): Promise<RoomUser | null> {
+    if (!connId) return null;
+    try {
+      await this.ensureWsMeta();
+      const res = await this.state.storage.sql.exec(
+        "SELECT username, role FROM ws_meta WHERE id = ?", connId
+      );
+      const rows = (res.toArray ? res.toArray() : []) as Array<{ username: string; role: string }>;
+      if (rows && rows[0] && rows[0].username) {
+        return { username: rows[0].username, role: rows[0].role || "" };
+      }
+    } catch {}
+    return null;
+  }
+
+  // 实例醒来（或首次使用）时重建内存映射
+  private async hydrate(): Promise<void> {
+    if (this.hydrated) return;
+    this.hydrated = true;
+    try {
+      await this.ensureWsMeta();
+      const socks = this.state.getWebSockets();
+      if (!socks.length) return;
+      // 读回所有 socket 的身份与房间归属
+      const metas = new Map<string, { username: string; role: string; room: string }>();
+      try {
+        const res = await this.state.storage.sql.exec("SELECT id, username, role, room FROM ws_meta");
+        const rows = (res.toArray ? res.toArray() : []) as Array<{ id: string; username: string; role: string; room: string }>;
+        for (const r of rows) metas.set(r.id, { username: r.username || "", role: r.role || "", room: r.room || "" });
+      } catch {}
+      // 清理孤儿行：socket 已断开但 ws_meta 行残留（实例被回收时 webSocketClose 可能不触发）
+      try {
+        const live = new Set<string>();
+        for (const req of socks) {
+          const a = req.deserializeAttachment() as WsAttach | null;
+          if (a && a.id) live.add(a.id);
+        }
+        for (const id of metas.keys()) {
+          if (!live.has(id)) {
+            await this.state.storage.sql.exec("DELETE FROM ws_meta WHERE id = ?", id).catch(() => {});
+          }
+        }
+      } catch {}
+      for (const req of socks) {
+        const sock = this.socketOf(req);
+        const a = req.deserializeAttachment() as WsAttach | null;
+        if (!a || !a.username || !sock) continue;
+        const user: RoomUser = { username: a.username, role: a.role || "" };
+        this.users.set(sock, user);
+        if (!this.byUser.has(user.username)) this.byUser.set(user.username, new Set());
+        this.byUser.get(user.username)!.add(sock);
+        // 房间归属：优先用 storage 里的最新值；附件不含房间（可变状态放 storage）
+        const meta = metas.get(a.id);
+        const room = (meta && meta.room) || "";
+        if (room) this.roomOf.set(sock, room);
+      }
+    } catch {}
   }
 
   private sendTo(ws: WebSocket, obj: unknown): void {
