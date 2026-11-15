@@ -59,3 +59,6 @@ live_snap.html
 # 批量转换日志
 redocx_all.log
 *.log
+
+# 本地截图产物
+shots/

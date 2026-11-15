@@ -327,8 +327,9 @@ export const html = `<!DOCTYPE html>
   .cb-cell .dot { position: absolute; width: 24%; height: 24%; border-radius: 50%; background: var(--cyan); opacity: .9; box-shadow: 0 0 8px rgba(0,240,255,.8); pointer-events: none; }
   .cb-cell .cap { position: absolute; width: 84%; height: 84%; border: 2px solid var(--cyan); border-radius: 50%; opacity: .85; pointer-events: none; }
   .cb-piece { position: relative; z-index: 2; line-height: 1; pointer-events: none; font-weight: 700; }
-  .cb-piece.up { color: #eaf6ff; text-shadow: 0 0 10px rgba(0,200,255,.85), 0 1px 2px #000; }
-  .cb-piece.dn { color: #93a8bd; text-shadow: 0 0 8px rgba(0,110,180,.65), 0 1px 2px #000; }
+  /* 亮方/暗方用霓虹青 vs 霓虹紫区分（与全站 cyan/magenta 配色一致，弱光下也一眼可辨） */
+  .cb-piece.up { color: #eaf6ff; text-shadow: 0 0 11px rgba(0,210,255,.9), 0 1px 2px #000; }
+  .cb-piece.dn { color: #d3a6ff; text-shadow: 0 0 11px rgba(190,90,255,.9), 0 1px 2px #000; }
   .cb-xq .cb-piece.up { color: #ff6b6b; text-shadow: 0 0 11px rgba(255,60,60,.85), 0 1px 2px #000; }
   .cb-xq .cb-piece.dn { color: #8fd3ff; text-shadow: 0 0 11px rgba(0,170,255,.85), 0 1px 2px #000; }
   .cb-chess .cb-piece { font-size: min(7.2vw, 40px); }
