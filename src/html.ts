@@ -818,19 +818,19 @@ export const html = `<!DOCTYPE html>
       <div class="lobby-grid">
         <div class="lobby-card">
           <div class="t">♟ 国际象棋</div>
-          <div class="d">5 Credits / 局 · 真人对战</div>
+          <div class="d"><span class="fee" data-fee="chess">28</span> Credits / 局 · 真人对战</div>
           <button class="btn small magenta wide" data-game-buy="chess">购买房间号</button>
           <button class="btn small wide" data-game-join="chess">输入房间号加入</button>
         </div>
         <div class="lobby-card">
           <div class="t">♞ 中国象棋</div>
-          <div class="d">5 Credits / 局 · 真人对战</div>
+          <div class="d"><span class="fee" data-fee="xiangqi">28</span> Credits / 局 · 真人对战</div>
           <button class="btn small magenta wide" data-game-buy="xiangqi">购买房间号</button>
           <button class="btn small wide" data-game-join="xiangqi">输入房间号加入</button>
         </div>
         <div class="lobby-card">
           <div class="t">🍬 消消乐</div>
-          <div class="d">10 Credits / 局 · 单人连线消除</div>
+          <div class="d"><span class="fee" data-fee="match3">50</span> Credits / 局 · 单人连线消除</div>
           <button class="btn small magenta wide" data-game-buy="match3">购买并开始</button>
         </div>
       </div>
@@ -854,13 +854,13 @@ export const html = `<!DOCTYPE html>
           <span class="mkt-bal">我的 Credits：<b id="shopGameBalance">0</b></span>
         </div>
         <p class="market-note">
-          <b>🍬 消消乐</b>：单人连线消除，买完直接开玩（10 Credits）。<br>
-          <b>♟ 国际象棋 / ♞ 中国象棋</b>：真人对战，买完把房间号发给好友，人齐了点「开始棋局」（5 Credits / 局）。
+          <b>🍬 消消乐</b>：单人连线消除，买完直接开玩（<span class="fee" data-fee="match3">50</span> Credits）。<br>
+          <b>♟ 国际象棋 / ♞ 中国象棋</b>：真人对战，买完把房间号发给好友，人齐了点「开始棋局」（<span class="fee" data-fee="chess">28</span> Credits / 局）。
         </p>
         <div class="tool-row" style="justify-content:center">
-          <button class="btn small magenta" data-shop-buy="match3" type="button">🍬 消消乐 · 10</button>
-          <button class="btn small magenta" data-shop-buy="chess" type="button">♟ 国际象棋 · 5</button>
-          <button class="btn small magenta" data-shop-buy="xiangqi" type="button">♞ 中国象棋 · 5</button>
+          <button class="btn small magenta" data-shop-buy="match3" type="button">🍬 消消乐 · <span class="fee" data-fee="match3">50</span></button>
+          <button class="btn small magenta" data-shop-buy="chess" type="button">♟ 国际象棋 · <span class="fee" data-fee="chess">28</span></button>
+          <button class="btn small magenta" data-shop-buy="xiangqi" type="button">♞ 中国象棋 · <span class="fee" data-fee="xiangqi">28</span></button>
         </div>
         <div class="err" id="shopGameErr"></div>
       </div>
@@ -1046,16 +1046,16 @@ export const html = `<!DOCTYPE html>
 
     <div class="panel hidden" id="gamePayPanel">
       <h2>▸ 加入房间 <span id="payRoomId"></span></h2>
-      <p class="hint" style="margin:0 0 14px">房主：<b id="payCreator"></b> · <span id="payTypeName"></span> · 每局 5 Credits</p>
+      <p class="hint" style="margin:0 0 14px">房主：<b id="payCreator"></b> · <span id="payTypeName"></span> · 每局 <span class="fee" data-fee="chess">28</span> Credits</p>
       <div class="lobby-grid">
         <div class="lobby-card">
           <div class="t">自己支付</div>
-          <div class="d">扣除自己 5 Credits 进入房间</div>
-          <button class="btn wide" id="btnPaySelf">▸ 支付 5 Credits</button>
+          <div class="d">扣除自己 <span class="fee" data-fee="chess">28</span> Credits 进入房间</div>
+          <button class="btn wide" id="btnPaySelf">▸ 支付 <span class="fee" data-fee="chess">28</span> Credits</button>
         </div>
         <div class="lobby-card">
           <div class="t">好友代付</div>
-          <div class="d">房主收到请求，同意则他替你付（他再扣 5）</div>
+          <div class="d">房主收到请求，同意则他替你付（他再扣 <span class="fee" data-fee="chess">28</span>）</div>
           <button class="btn magenta wide" id="btnPayRequest">▸ 请求好友代付</button>
         </div>
       </div>
@@ -1272,7 +1272,7 @@ export const html = `<!DOCTYPE html>
     <div class="modal-title">♟ 代付请求</div>
     <p id="inviteText"></p>
     <div class="tool-row" style="justify-content:center">
-      <button class="btn" id="btnInviteAccept">▸ 同意（扣 5 Credits）</button>
+      <button class="btn" id="btnInviteAccept">▸ 同意（扣 <span class="fee" data-fee="chess">28</span> Credits）</button>
       <button class="btn small magenta" id="btnInviteReject">拒绝</button>
     </div>
   </div>
@@ -2353,6 +2353,35 @@ export const html = `<!DOCTYPE html>
     return { ok: res.ok, status: res.status, data: data };
   }
 
+  // ===== 游戏费率（服务端为唯一真相源）=====
+  // ⚠️ 价格文案不要再硬编码：统一从 GET /api/game/fees 拉取，
+  //    保证「界面显示的价」永远等于「实际扣的价」。
+  var GAME_FEES = { match3: 50, chess: 28, xiangqi: 28 };
+
+  function feeOf(type) {
+    var f = GAME_FEES[type];
+    return (typeof f === 'number') ? f : 28;
+  }
+
+  // 把费率写进所有 [data-fee] 占位元素
+  function paintFees() {
+    Array.prototype.forEach.call(document.querySelectorAll('[data-fee]'), function (el) {
+      var t = el.getAttribute('data-fee');
+      el.textContent = String(feeOf(t));
+    });
+  }
+
+  async function loadFees() {
+    try {
+      var r = await api('/api/game/fees');
+      if (r.ok && r.data && r.data.fees) {
+        var f = r.data.fees;
+        for (var k in f) { if (typeof f[k] === 'number') GAME_FEES[k] = f[k]; }
+      }
+    } catch (e) {}
+    paintFees();
+  }
+
   var regVerified = null;
 
   async function submitAuth() {
@@ -2495,8 +2524,8 @@ export const html = `<!DOCTYPE html>
         }
       } else if (d.type === 'game-invite') {
         if (currentGame && d.roomId === currentGame.roomId && currentGame.iAmCreator) {
-          pendingInvite = { requestId: d.requestId, roomId: d.roomId, from: d.from };
-          document.getElementById('inviteText').textContent = d.from + ' 请求你替他支付 5 Credits 进入房间 ' + d.roomId + ' · 同意则你被扣 5 Credits，他免费进入';
+          pendingInvite = { requestId: d.requestId, roomId: d.roomId, from: d.from, gameType: d.gameType };
+          document.getElementById('inviteText').textContent = d.from + ' 请求你替他支付 ' + feeOf(d.gameType) + ' Credits 进入房间 ' + d.roomId + ' · 同意则你被扣 ' + feeOf(d.gameType) + ' Credits，他免费进入';
           inviteModal.classList.remove('hidden');
         }
       } else if (d.type === 'game-respond') {
@@ -2514,7 +2543,7 @@ export const html = `<!DOCTYPE html>
         if (currentGame && d.roomId === currentGame.roomId && currentGame.iAmCreator) {
           document.getElementById('roomOpponent').textContent = '· 对手：' + d.opponent;
           setRoomStatus('ready');
-          appendSys(d.opponent + ' 已进入房间（' + (d.payer === 'self' ? '自付 5 Credits' : '你代付 5 Credits') + '）');
+          appendSys(d.opponent + ' 已进入房间（' + (d.payer === 'self' ? '自付 ' + feeOf(currentGame.type) + ' Credits' : '你代付 ' + feeOf(currentGame.type) + ' Credits') + '）');
           refreshMe();
         }
       } else if (d.type === 'game-start') {
@@ -2791,6 +2820,12 @@ export const html = `<!DOCTYPE html>
       document.getElementById('payRoomId').textContent = r.data.roomId;
       document.getElementById('payCreator').textContent = r.data.creator;
       document.getElementById('payTypeName').textContent = gameTypeName(r.data.type);
+      // 支付面板的价格跟随该房间的游戏类型（国际象棋 / 中国象棋费率可能不同）
+      Array.prototype.forEach.call(document.querySelectorAll('[data-fee]'), function (el) {
+        var t = el.getAttribute('data-fee');
+        if (t === 'chess' || t === 'xiangqi') el.setAttribute('data-fee', r.data.type);
+      });
+      paintFees();
       document.getElementById('payWaitHint').style.display = 'none';
       payErr.style.color = '';
       payErr.textContent = '';
@@ -2885,7 +2920,7 @@ export const html = `<!DOCTYPE html>
     } catch (e) {}
   });
 
-  // ===== 消消乐 · 连线版（连连看规则 · 单人 · 10 Credits/局）=====
+  // ===== 消消乐 · 连线版（连连看规则 · 单人 · 价格见 feeOf('match3')）=====
   // 规则：点两个相同图案，之间的通路（≤2 个折点，可走空白格外环）能连上就消除
   var M3_N = 8;                                    // 8x8 = 64 格 = 32 对
   var M3_EMO = ['🍎', '🍊', '🍋', '🍇', '🍉', '🍓', '🥝', '🫐'];
@@ -3113,8 +3148,8 @@ export const html = `<!DOCTYPE html>
       var done = document.createElement('div');
       done.className = 'm3-done';
       done.textContent = cleared
-        ? '🎉 全部消除！通关得分 ' + m3.score + '（含通关奖励 +' + M3_CLEAR_BONUS + '）· 再来一局请到 SHOP 购买（10 Credits）'
-        : '🍬 本局结束 · 最终得分 ' + m3.score + ' · 再来一局请到 SHOP 购买（10 Credits）';
+        ? '🎉 全部消除！通关得分 ' + m3.score + '（含通关奖励 +' + M3_CLEAR_BONUS + '）· 再来一局请到 SHOP 购买（' + feeOf('match3') + ' Credits）'
+        : '🍬 本局结束 · 最终得分 ' + m3.score + ' · 再来一局请到 SHOP 购买（' + feeOf('match3') + ' Credits）';
       wrap.appendChild(done);
     }
     appendSys('消消乐结束 · 得分 ' + m3.score + (cleared ? '（通关）' : ''));
@@ -3498,7 +3533,7 @@ export const html = `<!DOCTYPE html>
     try {
       var r = await api('/api/game/pay-respond', { requestId: pendingInvite.requestId, accept: true });
       if (!r.ok) appendSys(r.data.error || '代付失败');
-      else appendSys('已为 ' + pendingInvite.from + ' 代付 5 Credits');
+      else appendSys('已为 ' + pendingInvite.from + ' 代付 ' + feeOf(currentGame && currentGame.type) + ' Credits');
     } catch (e) {}
     inviteModal.classList.add('hidden');
     pendingInvite = null;
@@ -6119,6 +6154,7 @@ export const html = `<!DOCTYPE html>
     raf = requestAnimationFrame(function () { raf = 0; sync(); });
   }
 
+  loadFees();
   sync();
   if (window.ResizeObserver) {
     var ro = new ResizeObserver(schedule);

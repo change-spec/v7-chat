@@ -1340,7 +1340,17 @@ async function handleLogs(request: Request, env: Env): Promise<Response> {
 }
 
 // ===== 对弈房间系统 =====
-const GAME_FEE = 5;
+// 游戏费率（单位 Credits）：消消乐单人局 50；国际象棋 / 中国象棋 每局 28。
+// ⚠️ 这是**唯一真相源**：前端展示价格通过 GET /api/game/fees 拉取同一份数据，
+//    不要再在前端硬编码价格文案（曾因硬编码导致「文案 5 实际扣 5」两处漂移）。
+const GAME_FEES: Record<string, number> = { match3: 50, chess: 28, xiangqi: 28 };
+const GAME_FEE_DEFAULT = 28;
+
+// 按游戏类型取费率（消消乐 / 国际象棋 / 中国象棋）
+function gameFeeFor(type: string): number {
+  const f = GAME_FEES[type];
+  return typeof f === "number" ? f : GAME_FEE_DEFAULT;
+}
 
 function genRoomId(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -3124,8 +3134,6 @@ async function handleMarketOrderFile(request: Request, env: Env): Promise<Respon
   return json({ name, mime, size: bytes.length, base64: bytesToBase64(bytes) });
 }
 
-const MATCH3_FEE = 10;
-
 async function handleGameCreate(request: Request, env: Env): Promise<Response> {
   // 建房入口已统一收敛到 SHOP（/api/shop/buy），此处不再开放直接创建
   const user = await authUser(request, env);
@@ -3150,7 +3158,7 @@ async function handleShopBuy(request: Request, env: Env): Promise<Response> {
   if (type !== "match3" && type !== "chess" && type !== "xiangqi") {
     return json({ error: "未知的游戏类型" }, 400);
   }
-  const fee = type === "match3" ? MATCH3_FEE : GAME_FEE;
+  const fee = gameFeeFor(type);
   // 先扣费再建房：扣费失败不留残局
   if (!(await spendCredits(env, user.username, fee))) {
     return json({ error: "Credits 不足，开局需要 " + fee + " Credits" }, 402);
@@ -3213,10 +3221,11 @@ async function handleGamePaySelf(request: Request, env: Env): Promise<Response> 
   if (row.opponent) return json({ error: "房间已满" }, 409);
   if (row.status !== "waiting") return json({ error: "房间已开始或已结束" }, 409);
   const keyActive = await hasActiveApiKey(env, user.username);
-  if (!keyActive && !(await spendCredits(env, user.username, GAME_FEE))) {
-    return json({ error: "Credits 不足，进入需要 " + GAME_FEE + " Credits（或绑定有效 API Key 免费）" }, 402);
+  const fee = gameFeeFor(row.type);
+  if (!keyActive && !(await spendCredits(env, user.username, fee))) {
+    return json({ error: "Credits 不足，进入需要 " + fee + " Credits（或绑定有效 API Key 免费）" }, 402);
   }
-  if (!keyActive) await logCredits(env, user.username, -GAME_FEE, "加入对弈房间");
+  if (!keyActive) await logCredits(env, user.username, -fee, "加入对弈房间");
   await env.DB.prepare("UPDATE games SET opponent = ?, payer = ?, status = 'ready' WHERE id = ?").bind(user.username, keyActive ? "apikey" : "self", id).run();
   await notifyUsers(env, [row.creator, user.username], { type: "game-join", roomId: id, opponent: user.username, payer: keyActive ? "apikey" : "self" });
   return json({ ok: true, roomId: id });
@@ -3265,7 +3274,7 @@ async function handleGamePayRespond(request: Request, env: Env): Promise<Respons
     "SELECT id, room_id, from_user, status FROM game_requests WHERE id = ?"
   ).bind(reqId).first<{ id: number; room_id: string; from_user: string; status: string }>();
   if (!req || req.status !== "pending") return json({ error: "请求不存在或已处理" }, 404);
-  const game = await env.DB.prepare("SELECT id, creator, opponent, status FROM games WHERE id = ?").bind(req.room_id).first<{ creator: string; opponent: string | null; status: string }>();
+  const game = await env.DB.prepare("SELECT id, type, creator, opponent, status FROM games WHERE id = ?").bind(req.room_id).first<{ id: string; type: string; creator: string; opponent: string | null; status: string }>();
   if (!game || game.creator !== user.username) return json({ error: "只有房主可以回应代付请求" }, 403);
 
   if (!body.accept) {
@@ -3277,10 +3286,11 @@ async function handleGamePayRespond(request: Request, env: Env): Promise<Respons
     await env.DB.prepare("UPDATE game_requests SET status = 'rejected' WHERE id = ?").bind(reqId).run();
     return json({ error: "房间已满" }, 409);
   }
-  if (!(await spendCredits(env, user.username, GAME_FEE))) {
-    return json({ error: "你的 Credits 不足，代付需要 " + GAME_FEE + " Credits" }, 402);
+  const fee = gameFeeFor(game.type);
+  if (!(await spendCredits(env, user.username, fee))) {
+    return json({ error: "你的 Credits 不足，代付需要 " + fee + " Credits" }, 402);
   }
-  await logCredits(env, user.username, -GAME_FEE, "代付好友对弈费");
+  await logCredits(env, user.username, -fee, "代付好友对弈费");
   await env.DB.prepare("UPDATE game_requests SET status = 'accepted' WHERE id = ?").bind(reqId).run();
   await env.DB.prepare("UPDATE games SET opponent = ?, payer = ?, status = 'ready' WHERE id = ?").bind(req.from_user, user.username, req.room_id).run();
   await notifyUsers(env, [game.creator, req.from_user], { type: "game-join", roomId: req.room_id, opponent: req.from_user, payer: user.username });
@@ -3367,6 +3377,11 @@ async function handleGameEnd(request: Request, env: Env): Promise<Response> {
   return json({ ok: true });
 }
 
+// 游戏费率查询：前端用它渲染价格文案，保证「看到的价」=「实际扣的价」
+async function handleGameFees(request: Request, env: Env): Promise<Response> {
+  return json({ ok: true, fees: GAME_FEES });
+}
+
 async function handleGameState(request: Request, env: Env): Promise<Response> {
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
@@ -3430,6 +3445,7 @@ export default {
     if (url.pathname === "/api/game/move" && request.method === "POST") return handleGameMove(request, env);
     if (url.pathname === "/api/game/end" && request.method === "POST") return handleGameEnd(request, env);
     if (url.pathname === "/api/game/state" && request.method === "GET") return handleGameState(request, env);
+    if (url.pathname === "/api/game/fees" && request.method === "GET") return handleGameFees(request, env);
     if (url.pathname === "/api/rooms" && request.method === "GET") return handleRoomsList(request, env);
     if (url.pathname === "/api/rooms/create" && request.method === "POST") return handleRoomCreate(request, env);
     if (url.pathname === "/api/rooms/history" && request.method === "GET") return handleRoomHistory(request, env);
