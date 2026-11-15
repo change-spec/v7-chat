@@ -338,6 +338,39 @@ export const html = `<!DOCTYPE html>
   .cb-overlay { position: absolute; inset: 6px; pointer-events: none; overflow: visible; }
   .cb-overlay line { stroke: rgba(0,240,255,.34); stroke-width: 1.5; }
   .cb-result { text-align: center; color: var(--amber); font-size: 15px; padding: 16px 0 4px; letter-spacing: 1px; text-shadow: 0 0 12px rgba(255,184,0,.55); }
+  /* ===== 结算面板（认输 / 将死 / 逼和 / 困毙 统一走这里）===== */
+  /* 结算态：隐藏棋盘，结算面板独占主位（避免叠在棋盘上被遮） */
+  .cb-wrap.settled .cb-stage,
+  .cb-wrap.settled .cb-tip { display: none; }
+  .cb-wrap.settled .cb-settle { margin: 6px auto; }
+  .cb-settle {
+    margin: 14px auto 4px; max-width: 420px; width: 100%;
+    border: 1px solid rgba(255,184,0,.45); border-radius: 10px;
+    background: linear-gradient(180deg, rgba(255,184,0,.10), rgba(0,0,0,.42));
+    box-shadow: 0 0 26px rgba(255,184,0,.22), inset 0 0 22px rgba(255,184,0,.07);
+    padding: 16px 16px 14px; text-align: center;
+    animation: settleIn .34s cubic-bezier(.2,.9,.25,1);
+  }
+  @keyframes settleIn { from { opacity: 0; transform: translateY(14px) scale(.96); } to { opacity: 1; transform: none; } }
+  .cb-settle.win  { border-color: rgba(0,255,150,.55); background: linear-gradient(180deg, rgba(0,255,150,.13), rgba(0,0,0,.42)); box-shadow: 0 0 30px rgba(0,255,150,.28), inset 0 0 22px rgba(0,255,150,.08); }
+  .cb-settle.lose { border-color: rgba(255,70,120,.5);  background: linear-gradient(180deg, rgba(255,70,120,.11), rgba(0,0,0,.42)); box-shadow: 0 0 26px rgba(255,70,120,.22), inset 0 0 22px rgba(255,70,120,.07); }
+  .cb-settle .s-emoji { font-size: 40px; line-height: 1; filter: drop-shadow(0 0 14px rgba(255,184,0,.65)); }
+  .cb-settle.win  .s-emoji { filter: drop-shadow(0 0 16px rgba(0,255,150,.75)); }
+  .cb-settle.lose .s-emoji { filter: drop-shadow(0 0 14px rgba(255,70,120,.65)); }
+  .cb-settle .s-title { margin-top: 6px; font-size: 21px; font-weight: 700; letter-spacing: 2px; color: #ffd76a; text-shadow: 0 0 16px rgba(255,184,0,.6); }
+  .cb-settle.win  .s-title { color: #6cffc4; text-shadow: 0 0 16px rgba(0,255,150,.65); }
+  .cb-settle.lose .s-title { color: #ff92b0; text-shadow: 0 0 16px rgba(255,70,120,.6); }
+  .cb-settle .s-reason { margin-top: 6px; font-size: 13px; color: var(--dim); letter-spacing: 1px; }
+  .cb-settle .s-players { margin-top: 12px; display: flex; gap: 10px; justify-content: center; }
+  .cb-settle .s-p { flex: 1 1 0; min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 9px 6px; background: rgba(0,0,0,.3); }
+  .cb-settle .s-p .nm { font-size: 12.5px; color: var(--cyan); text-shadow: 0 0 8px rgba(0,240,255,.45); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cb-settle .s-p .rl { font-size: 11px; color: var(--dim); margin-top: 3px; }
+  .cb-settle .s-p.me { border-color: rgba(0,240,255,.5); box-shadow: inset 0 0 14px rgba(0,240,255,.12); }
+  .cb-settle .s-p.me .nm { color: #7ef9ff; }
+  .cb-settle .s-p.winner { border-color: rgba(0,255,150,.55); }
+  .cb-settle .s-p.winner .nm { color: #6cffc4; }
+  .cb-settle .s-acts { margin-top: 13px; display: flex; gap: 9px; justify-content: center; flex-wrap: wrap; }
+  .cb-settle .s-note { margin-top: 9px; font-size: 11px; color: var(--dim); line-height: 1.7; }
   .cb-tip { text-align: center; font-size: 12px; color: var(--dim); padding: 2px 0 0; }
   .board-area {
     min-height: 240px; border: 1px solid var(--line); border-radius: 10px;
@@ -1081,8 +1114,12 @@ export const html = `<!DOCTYPE html>
         <span class="hint" style="margin:0">已就座 · 等待房主开始棋局…</span>
       </div>
       <div class="tool-row" id="roomOwnerBtns" style="display:none">
-        <button class="btn small" id="btnGameDelete">🗑 删除房间</button>
+        <button class="btn small magenta" id="btnGameDelete">🗑 删除房间</button>
         <span class="hint" style="margin:0">删除后房间号立即释放，别人再加入会提示「房间不存在」</span>
+      </div>
+      <div class="tool-row" id="roomGuestBtns" style="display:none">
+        <button class="btn small magenta" id="btnGameEndAsGuest">🏁 结束本局</button>
+        <span class="hint" style="margin:0">你是对手 · 可结束本局，或点下方「离开房间页」换人</span>
       </div>
       <div class="tool-row"><button class="btn small" id="btnRoomLeave">▸ 离开房间页</button></div>
     </div>
@@ -2357,6 +2394,9 @@ export const html = `<!DOCTYPE html>
     return { ok: res.ok, status: res.status, data: data };
   }
 
+  // 当前登录用户名（结算面板要显示「你」是谁）
+  var myName = '';
+
   // ===== 游戏费率（服务端为唯一真相源）=====
   // ⚠️ 价格文案不要再硬编码：统一从 GET /api/game/fees 拉取，
   //    保证「界面显示的价」永远等于「实际扣的价」。
@@ -2544,11 +2584,16 @@ export const html = `<!DOCTYPE html>
           }
         }
       } else if (d.type === 'game-join') {
-        if (currentGame && d.roomId === currentGame.roomId && currentGame.iAmCreator) {
-          document.getElementById('roomOpponent').textContent = '· 对手：' + d.opponent;
-          setRoomStatus('ready');
-          appendSys(d.opponent + ' 已进入房间（' + (d.payer === 'self' ? '自付 ' + feeOf(currentGame.type) + ' Credits' : '你代付 ' + feeOf(currentGame.type) + ' Credits') + '）');
-          refreshMe();
+        if (currentGame && d.roomId === currentGame.roomId) {
+          if (currentGame.iAmCreator) {
+            document.getElementById('roomOpponent').textContent = '· 对手：' + d.opponent;
+            currentGame.opponentName = d.opponent;
+            setRoomStatus('ready');
+            appendSys(d.opponent + ' 已进入房间（' + (d.payer === 'self' ? '自付 ' + feeOf(currentGame.type) + ' Credits' : '你代付 ' + feeOf(currentGame.type) + ' Credits') + '）');
+            refreshMe();
+          } else {
+            currentGame.creatorName = currentGame.creatorName || d.opponent;
+          }
         }
       } else if (d.type === 'game-start') {
         if (currentGame && d.roomId === currentGame.roomId) {
@@ -2564,16 +2609,30 @@ export const html = `<!DOCTYPE html>
       } else if (d.type === 'game-end') {
         if (currentGame && d.roomId === currentGame.roomId) {
           setRoomStatus('ended');
-          if (currentGame.type !== 'match3') cbOnEnd(d.winner, d.result);
-          else appendSys('房间已被房主结束');
-          // 房间已结束且仍停留在房间里 → 闪退回聊天页（避免卡在已结束的房间）
-          var endedRid = currentGame.roomId;
-          setTimeout(function () {
-            if (currentGame && currentGame.roomId === endedRid) {
-              appendSys('本局已结束，已返回聊天页');
-              exitGameRoom();
-            }
-          }, 2500);
+          if (currentGame.type !== 'match3') {
+            cbOnEnd(d.winner, d.result);
+          } else {
+            // 消消乐：也走结算界面（房主视角）
+            cbShowResult(d.winner || '', d.result || '本局结束');
+          }
+          // ⚠️ 不再自动闪退：结算界面必须留在房间里，用户才能看到胜败并删除房间。
+          //    用户可点结算面板上的「返回聊天 / 再来一局 / 删除房间」。
+        }
+      } else if (d.type === 'game-restart') {
+        if (currentGame && d.roomId === currentGame.roomId) {
+          var box = document.querySelector('.cb-settle');
+          if (box) box.remove();
+          var wrapEl = document.getElementById('cbWrap');
+          if (wrapEl) wrapEl.classList.remove('settled');
+          if (cb) {
+            cb.over = false; cb.playing = false; cb.sel = null; cb.moves = null;
+            cb.keys = []; cb.lastMove = null;
+            cb.st = cb.G.parse(d.board);
+            cbRender();
+          }
+          cbLastBoard = d.board || '';
+          setRoomStatus('ready');
+          appendSys('房主开始了下一局');
         }
       } else if (d.type === 'game-deleted') {
         // 房间被房主删除 → 立即退回聊天页
@@ -2582,11 +2641,16 @@ export const html = `<!DOCTYPE html>
           exitGameRoom();
         }
       } else if (d.type === 'game-leave') {
-        // 对手在开局前离开了 → 座位释放，房间回到「等待加入」
+        // 对手离开了 → 座位释放，房间回到「等待加入」，可随时换对手
         if (currentGame && d.roomId === currentGame.roomId && currentGame.iAmCreator) {
-          document.getElementById('roomOpponent').textContent = '';
+          document.getElementById('roomOpponent').textContent = '· 对手：空（可换人）';
+          currentGame.opponentName = '';
+          var sb = document.querySelector('.cb-settle');
+          if (sb) sb.remove();
+          var wrapEl = document.getElementById('cbWrap');
+          if (wrapEl) wrapEl.classList.remove('settled');
           setRoomStatus('waiting');
-          appendSys(d.opponent + ' 已离开房间，座位已释放');
+          appendSys(d.opponent + ' 已离开房间，座位已释放 · 把房间号发给新对手即可换人对弈');
         }
       } else if (d.type === 'presence') {
         if (d.online !== undefined) {
@@ -2782,7 +2846,14 @@ export const html = `<!DOCTYPE html>
     showOnly(which === 'lobby' ? gameLobby : which === 'pay' ? gamePayPanel : which === 'room' ? gameRoomPanel : chatPanel);
   }
   function gameTypeName(t) { return t === 'xiangqi' ? '中国象棋' : t === 'match3' ? '消消乐' : '国际象棋'; }
-  function refreshMe() { api('/api/me').then(function (r) { if (r.ok) refreshCredits(r.data.points); }); }
+  function refreshMe() {
+    api('/api/me').then(function (r) {
+      if (r.ok) {
+        refreshCredits(r.data.points);
+        if (r.data && r.data.username) myName = r.data.username;
+      }
+    });
+  }
 
   document.getElementById('btnGame').addEventListener('click', function () {
     gameErr.textContent = '';
@@ -2809,15 +2880,15 @@ export const html = `<!DOCTYPE html>
   }
 
   // 删除房间（房主）：房间号立即释放
-  document.getElementById('btnGameDelete').addEventListener('click', async function () {
-    if (!currentGame || !currentGame.iAmCreator) return;
-    var rid = currentGame.roomId;
+  document.getElementById('btnGameDelete').addEventListener('click', function () { doDeleteRoom(); });
+
+  // 对手「结束本局」：结束对局（不删房间，房主可继续换对手）
+  document.getElementById('btnGameEndAsGuest').addEventListener('click', async function () {
+    if (!currentGame || currentGame.iAmCreator) return;
     try {
-      var r = await api('/api/game/delete', { roomId: rid });
-      if (!r.ok) { appendSys(r.data.error || '删除失败'); return; }
-      appendSys('房间 ' + rid + ' 已删除，房间号已释放');
-      exitGameRoom();
-    } catch (e) { appendSys('网络错误，删除失败'); }
+      var r = await api('/api/game/end', { roomId: currentGame.roomId, result: '对手结束本局' });
+      if (!r.ok) appendSys(r.data.error || '结束失败');
+    } catch (e) { appendSys('网络错误'); }
   });
 
   // 购买房间号：SHOP（data-shop-buy）与游戏大厅（data-game-buy）共用
@@ -2827,7 +2898,10 @@ export const html = `<!DOCTYPE html>
     try {
       var r = await api('/api/shop/buy', { type: type });
       if (!r.ok) { if (errEl) errEl.textContent = (r.data && r.data.error) || '购买失败'; return; }
-      currentGame = { roomId: r.data.roomId, type: r.data.type, iAmCreator: true };
+      currentGame = {
+        roomId: r.data.roomId, type: r.data.type, iAmCreator: true,
+        creatorName: r.data.creator || myName, opponentName: ''
+      };
       refreshMe();
       if (r.data.type === 'match3') {
         enterGameRoom('playing');
@@ -2863,12 +2937,18 @@ export const html = `<!DOCTYPE html>
       if (!r.ok) { gameErr.textContent = r.data.error || '加入失败'; return; }
       if (r.data.self) {
         // 房主本人（含代购归属人）进入自己买的房间：免费，直接进等待界面
-        currentGame = { roomId: r.data.roomId, type: r.data.type, iAmCreator: true };
+        currentGame = {
+          roomId: r.data.roomId, type: r.data.type, iAmCreator: true,
+          creatorName: r.data.creatorName || r.data.creator || myName, opponentName: ''
+        };
         enterGameRoom('waiting');
         appendSys('已进入自己的房间 ' + r.data.roomId + ' · 把房间号发给好友，人齐了点「开始棋局」');
         return;
       }
-      currentGame = { roomId: r.data.roomId, type: r.data.type, iAmCreator: false };
+      currentGame = {
+        roomId: r.data.roomId, type: r.data.type, iAmCreator: false,
+        creatorName: r.data.creatorName || r.data.creator || '', opponentName: myName
+      };
       document.getElementById('payRoomId').textContent = r.data.roomId;
       document.getElementById('payCreator').textContent = r.data.creator;
       document.getElementById('payTypeName').textContent = gameTypeName(r.data.type);
@@ -2891,6 +2971,7 @@ export const html = `<!DOCTYPE html>
     payErr.textContent = '';
     try {
       var r = await api('/api/game/pay-self', { roomId: currentGame.roomId });
+      if (r && r.ok && r.data && r.data.creatorName) currentGame.creatorName = r.data.creatorName;
       if (!r.ok) { payErr.textContent = r.data.error || '支付失败'; return; }
       enterGameRoom('ready');
       appendSys('支付成功，进入房间 ' + currentGame.roomId);
@@ -2913,13 +2994,14 @@ export const html = `<!DOCTYPE html>
     if (!currentGame) return;
     document.getElementById('roomIdDisplay').textContent = currentGame.roomId;
     document.getElementById('roomTypeName').textContent = gameTypeName(currentGame.type);
-    document.getElementById('roomOpponent').textContent = '';
+    document.getElementById('roomOpponent').textContent = currentGame.opponentName ? '· 对手：' + currentGame.opponentName : '';
     var creatorBtns = document.getElementById('roomCreatorBtns');
     var joinerBtns = document.getElementById('roomJoinerBtns');
     if (currentGame.type === 'match3') {
       creatorBtns.style.display = 'none';
       joinerBtns.style.display = 'none';
       document.getElementById('roomOwnerBtns').style.display = 'flex';
+      document.getElementById('roomGuestBtns').style.display = 'none';
       setRoomStatus('playing');
       showGamePanel('room');
       startMatch3();
@@ -2929,14 +3011,17 @@ export const html = `<!DOCTYPE html>
     // 棋类：初始化棋盘引擎（规则判定在引擎内，局面与服务端同步）
     cbInit(currentGame.type, currentGame.roomId);
     var ownerBtns = document.getElementById('roomOwnerBtns');
+    var guestBtns = document.getElementById('roomGuestBtns');
     if (currentGame.iAmCreator) {
       creatorBtns.style.display = 'flex';
       joinerBtns.style.display = 'none';
-      ownerBtns.style.display = 'flex';
+      ownerBtns.style.display = 'flex';   // 房主：删除房间按钮始终可见
+      guestBtns.style.display = 'none';
     } else {
       creatorBtns.style.display = 'none';
       joinerBtns.style.display = 'flex';
       ownerBtns.style.display = 'none';
+      guestBtns.style.display = 'flex';   // 对手：可结束本局
     }
     setRoomStatus(status);
     showGamePanel('room');
@@ -3449,32 +3534,138 @@ export const html = `<!DOCTYPE html>
     var G = cb.G;
     var s = G.status(cb.st, cb.keys);
     if (!s.over) return;
-    cb.over = true;
-    cb.sel = null;
-    cb.moves = null;
-    cbRender();
-    var w = s.winner === 'draw' ? 'draw' : (s.winner === 0 ? 'a' : 'b');
-    cbShowResult(s.result + (s.reason ? '（' + s.reason + '）' : ''));
-    api('/api/game/end', { roomId: cb.roomId, winner: w, result: s.result }).catch(function () {});
+    // 将死 / 逼和 / 困毙 —— 与认输走同一个结算界面
+    cbFinishByEngine(s);
   }
 
-  function cbShowResult(text) {
+  // ===== 结算面板 =====
+  // 认输 / 将死 / 逼和 / 困毙 / 房主结束 —— 全部走这里，样式与信息一致。
+  // 参数：winner = 胜者用户名（'draw' 表示平局，'' 表示未定），reason = 结束原因
+  function cbShowResult(winner, reason) {
     var wrap = document.getElementById('cbWrap');
     if (!wrap) return;
-    var old = wrap.querySelector('.cb-result');
-    if (old) old.remove();
-    var d = document.createElement('div');
-    d.className = 'cb-result';
-    d.textContent = '🏁 ' + text;
-    wrap.appendChild(d);
-    appendSys('棋局结束 · ' + text);
+    var prev = wrap.querySelector('.cb-settle');
+    if (prev) prev.remove();
+    var oldLine = wrap.querySelector('.cb-result');
+    if (oldLine) oldLine.remove();
+    // 结算态：隐藏棋盘，结算面板独占主位
+    wrap.classList.add('settled');
+
+    var me = currentGame ? (currentGame.iAmCreator ? currentGame.creatorName : currentGame.opponentName) : '';
+    var isDraw = winner === 'draw';
+    var iWon = !isDraw && winner && winner === me;
+    var iLost = !isDraw && winner && winner !== me && !!winner;
+
+    var cls = isDraw ? '' : (iWon ? 'win' : (iLost ? 'lose' : ''));
+    var emoji = isDraw ? '🤝' : (iWon ? '🏆' : (iLost ? '💀' : '🏁'));
+    var title = isDraw ? '平局' : (iWon ? '你赢了' : (iLost ? '你输了' : '棋局结束'));
+
+    var box = document.createElement('div');
+    box.className = 'cb-settle ' + cls;
+
+    // 双方（房主 = 白/红方，对手 = 黑方）
+    var creator = currentGame ? currentGame.creatorName : '房主';
+    var opponent = currentGame ? currentGame.opponentName : '对手';
+    function sideRow(name, role, w) {
+      return '<div class="s-p' + (name === me ? ' me' : '') + (w ? ' winner' : '') + '">' +
+        '<div class="nm">' + escHtml(String(name || '—')) + '</div>' +
+        '<div class="rl">' + role + '</div></div>';
+    }
+    var creatorWon = winner && winner === creator;
+    var opponentWon = winner && winner === opponent;
+    box.innerHTML =
+      '<div class="s-emoji">' + emoji + '</div>' +
+      '<div class="s-title">' + title + '</div>' +
+      '<div class="s-reason">' + escHtml(String(reason || '棋局结束')) + '</div>' +
+      '<div class="s-players">' +
+        sideRow(creator, cb.type === 'xiangqi' ? '红方 · 房主' : '白方 · 房主', creatorWon) +
+        sideRow(opponent, cb.type === 'xiangqi' ? '黑方' : '黑方', opponentWon) +
+      '</div>' +
+      '<div class="s-acts">' +
+        (currentGame && currentGame.iAmCreator
+          ? '<button class="btn small" id="cbAgainBtn" type="button">🔄 再来一局</button>' : '') +
+        '<button class="btn small" id="cbSettleLeaveBtn" type="button">▸ 返回聊天</button>' +
+        (currentGame && currentGame.iAmCreator
+          ? '<button class="btn small magenta" id="cbSettleDelBtn" type="button">🗑 删除房间</button>' : '') +
+      '</div>' +
+      '<div class="s-note">房间号 <b>' + escHtml(currentGame ? currentGame.roomId : '') + '</b> 仍然有效 · 可把这个房间号发给下一位对手直接换人对弈</div>';
+    wrap.appendChild(box);
+
+    var again = document.getElementById('cbAgainBtn');
+    if (again) again.addEventListener('click', function () { cbRestart(); });
+    var lv = document.getElementById('cbSettleLeaveBtn');
+    if (lv) lv.addEventListener('click', function () { exitGameRoom(); });
+    var dl = document.getElementById('cbSettleDelBtn');
+    if (dl) dl.addEventListener('click', function () { doDeleteRoom(); });
+
+    appendSys('棋局结束 · ' + title + '（' + (reason || '棋局结束') + '）');
+  }
+
+  // HTML 转义（用户名等外部文本）
+  function escHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  // 再来一局（房主）：重置局面，同一对手继续下
+  function cbRestart() {
+    if (!currentGame || !currentGame.iAmCreator) return;
+    api('/api/game/restart', { roomId: currentGame.roomId }).then(function (r) {
+      if (!r.ok) { appendSys(r.data.error || '无法开始下一局'); return; }
+      var box = document.querySelector('.cb-settle');
+      if (box) box.remove();
+      var wrapEl = document.getElementById('cbWrap');
+      if (wrapEl) wrapEl.classList.remove('settled');
+      cb.over = false;
+      cb.playing = false;
+      cb.sel = null;
+      cb.moves = null;
+      cb.keys = [];
+      cb.lastMove = null;
+      cb.st = cb.G.parse(r.data.board);
+      cbLastBoard = r.data.board;
+      setRoomStatus('ready');
+      cbRender();
+      appendSys('已重置局面，房主可以点「开始棋局」开下一局');
+    }).catch(function () { appendSys('网络错误'); });
+  }
+
+  // 删除房间（房主）：抽出来给按钮和结算面板共用
+  function doDeleteRoom() {
+    if (!currentGame || !currentGame.iAmCreator) return;
+    var rid = currentGame.roomId;
+    // 若本局还在进行 → 先结束本局（服务端会先置 ended），再删，避免 409 让用户困惑
+    var finish = (cb && !cb.over && cb.playing)
+      ? api('/api/game/end', { roomId: rid, result: '房主删除了房间' }).catch(function () {})
+      : Promise.resolve();
+    finish.then(function () {
+      return api('/api/game/delete', { roomId: rid });
+    }).then(function (r) {
+      if (!r || !r.ok) { appendSys((r && r.data && r.data.error) || '删除失败'); return; }
+      appendSys('房间 ' + rid + ' 已删除，房间号已释放');
+      exitGameRoom();
+    }).catch(function () { appendSys('网络错误，删除失败'); });
+  }
+
+  // 引擎判定终局（将死 / 逼和 / 困毙）：上报服务端并显示结算
+  function cbFinishByEngine(status) {
+    if (!cb || cb.over) return;
+    cb.over = true;
+    var iAmCreator = cbMySide() === 0;
+    var winnerName = status.winner === 'draw' ? 'draw'
+      : (status.winner === 0 ? currentGame.creatorName : currentGame.opponentName);
+    var w = status.winner === 'draw' ? 'draw' : (status.winner === 0 ? 'a' : 'b');
+    cbShowResult(winnerName, status.reason || '棋局结束');
+    api('/api/game/end', { roomId: cb.roomId, winner: w, result: status.reason || '棋局结束' }).catch(function () {});
   }
 
   function cbGiveUp() {
     if (!cb || cb.over) return;
     cb.over = true;
-    cbShowResult(cbMySide() === 0 ? '房主认输' : '认输');
-    var w = cbMySide() === 0 ? 'b' : 'a';
+    var iAmCreator = cbMySide() === 0;
+    var winnerName = iAmCreator ? currentGame.opponentName : currentGame.creatorName;
+    cbShowResult(winnerName, (iAmCreator ? '房主' : '对手') + '认输');
+    var w = iAmCreator ? 'b' : 'a';
     api('/api/game/end', { roomId: cb.roomId, winner: w, result: '认输' }).catch(function () {});
   }
 
@@ -3508,14 +3699,12 @@ export const html = `<!DOCTYPE html>
         }
         if (!r.ok || !r.data || !r.data.game) return;
         var g = r.data.game;
-        // 房间已结束 → 自动闪退回聊天页（刷新页面后进来也能正确退出）
+        // 房间已结束 → 显示结算面板（不自动退出：用户要在结算面板里看胜败 / 删房间）
         if (g.status === 'ended') {
           setRoomStatus('ended');
           if (!cb.over) {
             if (currentGame.type !== 'match3') cbOnEnd(g.winner, g.result || '棋局结束');
-            appendSys('本局已结束，已返回聊天页');
           }
-          exitGameRoom();
           return;
         }
         if (g.board && g.board !== cbLastBoard) {
@@ -3558,8 +3747,10 @@ export const html = `<!DOCTYPE html>
       cb.playing = (g.status === 'playing');
       if (g.winner) {
         cb.over = true;
+        cb.sel = null;
+        cb.moves = null;
         cbRender();
-        cbShowResult(g.winner === 'draw' ? '和棋' : (g.winner === currentGame.creator ? '房主胜' : '对手胜'));
+        cbShowResult(g.winner, g.result || (g.winner === 'draw' ? '和棋' : '棋局结束'));
       } else {
         cbRender();
       }
@@ -3595,8 +3786,7 @@ export const html = `<!DOCTYPE html>
     cb.sel = null;
     cb.moves = null;
     cbRender();
-    var txt = result || (winner === 'draw' ? '和棋' : '棋局结束');
-    cbShowResult(txt);
+    cbShowResult(winner || '', result || (winner === 'draw' ? '和棋' : '棋局结束'));
   }
 
 

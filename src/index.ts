@@ -893,7 +893,16 @@ async function ensureSchema(env: Env): Promise<void> {
         board TEXT,
         turn TEXT,
         winner TEXT,
+        result TEXT,
         created_at TEXT NOT NULL
+      )`),
+      // 房间座位表：支持「一个房间多个玩家、空位可随时补人 / 换对手」
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS game_seats (
+        room_id TEXT NOT NULL,
+        username TEXT NOT NULL,
+        seat INTEGER NOT NULL DEFAULT 0,
+        joined_at TEXT NOT NULL,
+        PRIMARY KEY (room_id, username)
       )`),
       env.DB.prepare(`CREATE TABLE IF NOT EXISTS game_requests (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1340,6 +1349,97 @@ async function handleLogs(request: Request, env: Env): Promise<Response> {
 }
 
 // ===== 对弈房间系统 =====
+// ---------------------------------------------------------------------------
+// ⚠️ 自愈建表：游戏相关接口原本不调用 ensureSchema，导致线上缺 game_seats 表
+//    （与之前 chat_uploads 同一个坑）。这里做幂等自愈，成功才置标志。
+// ---------------------------------------------------------------------------
+let gameSchemaReady = false;
+async function ensureGameSchema(env: Env): Promise<void> {
+  if (gameSchemaReady) return;
+  try {
+    await env.DB.batch([
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS games (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        creator TEXT NOT NULL,
+        opponent TEXT,
+        status TEXT NOT NULL DEFAULT 'waiting',
+        payer TEXT,
+        board TEXT,
+        turn TEXT,
+        winner TEXT,
+        result TEXT,
+        created_at TEXT NOT NULL
+      )`),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS game_seats (
+        room_id TEXT NOT NULL,
+        username TEXT NOT NULL,
+        seat INTEGER NOT NULL DEFAULT 0,
+        joined_at TEXT NOT NULL,
+        PRIMARY KEY (room_id, username)
+      )`),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS game_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        room_id TEXT NOT NULL,
+        from_user TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'pay_for_me',
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL
+      )`)
+    ]);
+    // ⚠️ 已存在的旧表不会因 CREATE TABLE IF NOT EXISTS 而加新列 → 必须显式迁移
+    try {
+      await env.DB.prepare("ALTER TABLE games ADD COLUMN result TEXT").run();
+    } catch {}
+    gameSchemaReady = true;
+  } catch {}
+}
+
+
+// ---------------------------------------------------------------------------
+// 座位模型（game_seats 表）
+//   一个房间最多 2 个座位（seat 0 = 房主，seat 1 = 对手席）。
+//   「有空位即可加入」：即使已经开局（status=playing），只要对手席空着，
+//   别人也能加入 —— 这样打完一局可以直接换对手，不用重开房间。
+//   games.opponent 保留为「当前对手」的快查字段，game_seats 才是座位真相源。
+// ---------------------------------------------------------------------------
+const GAME_SEATS_MAX = 2;
+
+async function gameSeats(env: Env, roomId: string): Promise<Array<{ username: string; seat: number }>> {
+  try {
+    const r = await env.DB.prepare(
+      "SELECT username, seat FROM game_seats WHERE room_id = ? ORDER BY seat ASC"
+    ).bind(roomId).all<{ username: string; seat: number }>();
+    return (r.results || []) as Array<{ username: string; seat: number }>;
+  } catch {
+    return [];
+  }
+}
+
+// 房间里的玩家列表（含房主），座位号：0=房主，其余按加入顺序
+async function gamePlayers(env: Env, roomId: string): Promise<Array<{ username: string; seat: number }>> {
+  const row = await env.DB.prepare("SELECT creator FROM games WHERE id = ?").bind(roomId).first<{ creator: string }>();
+  if (!row) return [];
+  const seats = await gameSeats(env, roomId);
+  const list = [{ username: row.creator, seat: 0 }];
+  for (const s of seats) if (s.username !== row.creator) list.push(s);
+  return list;
+}
+
+// 当前对手（seat 1 的占用者）；没有则 null
+async function currentOpponent(env: Env, roomId: string, creator: string): Promise<string | null> {
+  const seats = await gameSeats(env, roomId);
+  const other = seats.find((s) => s.username !== creator);
+  return other ? other.username : null;
+}
+
+// 空着的座位号；没有空位返回 -1
+function freeSeat(players: Array<{ username: string; seat: number }>): number {
+  const used = new Set(players.map((p) => p.seat));
+  for (let i = 0; i < GAME_SEATS_MAX; i++) if (!used.has(i)) return i;
+  return -1;
+}
+
 // 游戏费率（单位 Credits）：消消乐单人局 50；国际象棋 / 中国象棋 每局 28。
 // ⚠️ 这是**唯一真相源**：前端展示价格通过 GET /api/game/fees 拉取同一份数据，
 //    不要再在前端硬编码价格文案（曾因硬编码导致「文案 5 实际扣 5」两处漂移）。
@@ -3146,6 +3246,7 @@ async function handleGameCreate(request: Request, env: Env): Promise<Response> {
 // 游戏引擎已修复并重新开放：消消乐为单人局（直接开房即玩），
 // 国际象棋 / 中国象棋为真人对战（开房后把房间号发给好友，人齐了开局）。
 async function handleShopBuy(request: Request, env: Env): Promise<Response> {
+  await ensureGameSchema(env);
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
   let body: { type?: string };
@@ -3179,10 +3280,11 @@ async function handleShopBuy(request: Request, env: Env): Promise<Response> {
   await env.DB.prepare(
     "INSERT INTO games (id, type, creator, opponent, status, payer, board, turn, winner, created_at) VALUES (?, ?, ?, NULL, ?, ?, NULL, NULL, NULL, ?)"
   ).bind(id, type, user.username, status, "self", now).run();
-  return json({ ok: true, roomId: id, type: type, fee: fee });
+  return json({ ok: true, roomId: id, type: type, fee: fee, creator: user.username });
 }
 
 async function handleGameJoin(request: Request, env: Env): Promise<Response> {
+  await ensureGameSchema(env);
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
   let body: { roomId?: string };
@@ -3195,19 +3297,24 @@ async function handleGameJoin(request: Request, env: Env): Promise<Response> {
   const row = await env.DB.prepare("SELECT id, type, creator, opponent, status FROM games WHERE id = ?").bind(id).first<{ id: string; type: string; creator: string; opponent: string | null; status: string }>();
   if (!row) return json({ error: "房间不存在，检查房间号" }, 404);
   if (row.type === "match3") return json({ error: "消消乐是单人游戏，无需加入" }, 400);
-  // ⚠️ 顺序很重要：先判状态，再判已满。
-  //    否则「已结束且仍留有 opponent 的房间」会误报「房间已满」（实际是这局已经打完了）。
-  if (row.status === "ended") return json({ error: "这局已经结束了，换个房间号吧" }, 409);
-  if (row.status === "playing") return json({ error: "房间已开局，无法加入" }, 409);
-  if (row.opponent) return json({ error: "房间已满" }, 409);
   // 房主本人（含被代购的房主）可以进自己买的房间：免费，直接进入等待界面
   if (row.creator === user.username) {
-    return json({ ok: true, roomId: id, type: row.type, creator: row.creator, self: true });
+    return json({ ok: true, roomId: id, type: row.type, creator: row.creator, self: true, creatorName: row.creator });
   }
-  return json({ ok: true, roomId: id, type: row.type, creator: row.creator });
+  // 座位模型：只要还有空位就能加入 —— 包括「已经开局」的房间（打完一局直接换对手）
+  const players = await gamePlayers(env, id);
+  const seat = freeSeat(players);
+  if (seat < 0) return json({ error: "房间已满（2 人已满）" }, 409);
+  // 已经在这个房间里 → 直接回房间
+  if (players.some((p) => p.username === user.username)) {
+    return json({ ok: true, roomId: id, type: row.type, creator: row.creator, already: true });
+  }
+  const oppNow = await currentOpponent(env, id, row.creator);
+  return json({ ok: true, roomId: id, type: row.type, creator: row.creator, seat: seat, creatorName: row.creator, opponentName: oppNow });
 }
 
 async function handleGamePaySelf(request: Request, env: Env): Promise<Response> {
+  await ensureGameSchema(env);
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
   let body: { roomId?: string };
@@ -3217,24 +3324,38 @@ async function handleGamePaySelf(request: Request, env: Env): Promise<Response> 
     return json({ error: "请求格式错误" }, 400);
   }
   const id = (body.roomId || "").trim().toUpperCase();
-  const row = await env.DB.prepare("SELECT id, type, creator, opponent, status FROM games WHERE id = ?").bind(id).first<{ type: string; creator: string; opponent: string | null; status: string }>();
+  const row = await env.DB.prepare("SELECT id, type, creator, opponent, status FROM games WHERE id = ?").bind(id).first<{ id: string; type: string; creator: string; opponent: string | null; status: string }>();
   if (!row) return json({ error: "房间不存在" }, 404);
   if (row.type === "match3") return json({ error: "消消乐是单人游戏，无需加入" }, 400);
   if (row.creator === user.username) return json({ error: "不能加入自己创建的房间" }, 400);
-  if (row.opponent) return json({ error: "房间已满" }, 409);
-  if (row.status !== "waiting") return json({ error: "房间已开始或已结束" }, 409);
+  // 座位模型：只要有空位就能加入（已开局的房间也能补人 / 换对手）
+  const players = await gamePlayers(env, id);
+  const seat = freeSeat(players);
+  if (seat < 0) return json({ error: "房间已满（2 人已满）" }, 409);
+  if (players.some((p) => p.username === user.username)) {
+    return json({ error: "你已经在房间里了" }, 409);
+  }
   const keyActive = await hasActiveApiKey(env, user.username);
   const fee = gameFeeFor(row.type);
   if (!keyActive && !(await spendCredits(env, user.username, fee))) {
     return json({ error: "Credits 不足，进入需要 " + fee + " Credits（或绑定有效 API Key 免费）" }, 402);
   }
   if (!keyActive) await logCredits(env, user.username, -fee, "加入对弈房间");
-  await env.DB.prepare("UPDATE games SET opponent = ?, payer = ?, status = 'ready' WHERE id = ?").bind(user.username, keyActive ? "apikey" : "self", id).run();
-  await notifyUsers(env, [row.creator, user.username], { type: "game-join", roomId: id, opponent: user.username, payer: keyActive ? "apikey" : "self" });
-  return json({ ok: true, roomId: id });
+  // 占座
+  await env.DB.prepare("INSERT OR REPLACE INTO game_seats (room_id, username, seat, joined_at) VALUES (?, ?, ?, ?)")
+    .bind(id, user.username, seat, new Date().toISOString()).run();
+  // 房间进入 ready；若是已开局的房间换人，局面重置为初始（由房主再点开始）
+  const opponent = await currentOpponent(env, id, row.creator);
+  await env.DB.prepare("UPDATE games SET opponent = ?, payer = ?, status = 'ready' WHERE id = ?")
+    .bind(opponent, keyActive ? "apikey" : "self", id).run();
+  await notifyUsers(env, [row.creator, user.username], {
+    type: "game-join", roomId: id, opponent: user.username, payer: keyActive ? "apikey" : "self"
+  });
+  return json({ ok: true, roomId: id, seat: seat, creatorName: row.creator, opponentName: user.username });
 }
 
 async function handleGamePayRequest(request: Request, env: Env): Promise<Response> {
+  await ensureGameSchema(env);
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
   let body: { roomId?: string };
@@ -3244,12 +3365,16 @@ async function handleGamePayRequest(request: Request, env: Env): Promise<Respons
     return json({ error: "请求格式错误" }, 400);
   }
   const id = (body.roomId || "").trim().toUpperCase();
-  const row = await env.DB.prepare("SELECT id, type, creator, opponent, status FROM games WHERE id = ?").bind(id).first<{ type: string; creator: string; opponent: string | null; status: string }>();
+  const row = await env.DB.prepare("SELECT id, type, creator, opponent, status FROM games WHERE id = ?").bind(id).first<{ id: string; type: string; creator: string; opponent: string | null; status: string }>();
   if (!row) return json({ error: "房间不存在" }, 404);
   if (row.type === "match3") return json({ error: "消消乐是单人游戏，无需加入" }, 400);
   if (row.creator === user.username) return json({ error: "不能加入自己创建的房间" }, 400);
-  if (row.opponent) return json({ error: "房间已满" }, 409);
-  if (row.status !== "waiting") return json({ error: "房间已开始或已结束" }, 409);
+  // 座位模型：只要有空位就能申请加入（已开局的房间也能换对手）
+  const players = await gamePlayers(env, id);
+  if (freeSeat(players) < 0) return json({ error: "房间已满（2 人已满）" }, 409);
+  if (players.some((p) => p.username === user.username)) {
+    return json({ error: "你已经在房间里了" }, 409);
+  }
   const pending = await env.DB.prepare(
     "SELECT id FROM game_requests WHERE room_id = ? AND from_user = ? AND status = 'pending'"
   ).bind(id, user.username).first();
@@ -3264,6 +3389,7 @@ async function handleGamePayRequest(request: Request, env: Env): Promise<Respons
 }
 
 async function handleGamePayRespond(request: Request, env: Env): Promise<Response> {
+  await ensureGameSchema(env);
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
   let body: { requestId?: number; accept?: boolean };
@@ -3285,9 +3411,11 @@ async function handleGamePayRespond(request: Request, env: Env): Promise<Respons
     await notifyUsers(env, [game.creator, req.from_user], { type: "game-respond", requestId: reqId, roomId: req.room_id, accepted: false });
     return json({ ok: true, rejected: true });
   }
-  if (game.opponent) {
+  // 接受时代付方占座（可能座位刚被别人抢走，再校验一次）
+  const seatsNow = await gamePlayers(env, req.room_id);
+  if (freeSeat(seatsNow) < 0) {
     await env.DB.prepare("UPDATE game_requests SET status = 'rejected' WHERE id = ?").bind(reqId).run();
-    return json({ error: "房间已满" }, 409);
+    return json({ error: "房间已满（2 人已满）" }, 409);
   }
   const fee = gameFeeFor(game.type);
   if (!(await spendCredits(env, user.username, fee))) {
@@ -3295,6 +3423,10 @@ async function handleGamePayRespond(request: Request, env: Env): Promise<Respons
   }
   await logCredits(env, user.username, -fee, "代付好友对弈费");
   await env.DB.prepare("UPDATE game_requests SET status = 'accepted' WHERE id = ?").bind(reqId).run();
+  // 被代付者占座
+  const seatNo = freeSeat(seatsNow);
+  await env.DB.prepare("INSERT OR REPLACE INTO game_seats (room_id, username, seat, joined_at) VALUES (?, ?, ?, ?)")
+    .bind(req.room_id, req.from_user, seatNo, new Date().toISOString()).run();
   await env.DB.prepare("UPDATE games SET opponent = ?, payer = ?, status = 'ready' WHERE id = ?").bind(req.from_user, user.username, req.room_id).run();
   await notifyUsers(env, [game.creator, req.from_user], { type: "game-join", roomId: req.room_id, opponent: req.from_user, payer: user.username });
   await notifyUsers(env, [game.creator, req.from_user], { type: "game-respond", requestId: reqId, roomId: req.room_id, accepted: true });
@@ -3302,6 +3434,7 @@ async function handleGamePayRespond(request: Request, env: Env): Promise<Respons
 }
 
 async function handleGameStart(request: Request, env: Env): Promise<Response> {
+  await ensureGameSchema(env);
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
   let body: { roomId?: string };
@@ -3314,20 +3447,23 @@ async function handleGameStart(request: Request, env: Env): Promise<Response> {
   const row = await env.DB.prepare("SELECT id, type, creator, opponent, status FROM games WHERE id = ?").bind(id).first<{ id: string; type: string; creator: string; opponent: string | null; status: string }>();
   if (!row) return json({ error: "房间不存在" }, 404);
   if (row.creator !== user.username) return json({ error: "只有房主可以开始棋局" }, 403);
-  if (!row.opponent || row.status !== "ready") return json({ error: "等待对手加入并完成支付" }, 409);
+  const opponent = await currentOpponent(env, id, row.creator);
+  if (!opponent || row.status !== "ready") return json({ error: "等待对手加入并完成支付" }, 409);
   // 写入初始局面：房主执白（国际象棋）/ 红（中国象棋）
   const startFen = row.type === "xiangqi"
     ? "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR r"
     : "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
-  await env.DB.prepare("UPDATE games SET status = 'playing', board = ?, turn = ? WHERE id = ?")
+  await env.DB.prepare("UPDATE games SET status = 'playing', board = ?, turn = ?, winner = NULL, result = NULL WHERE id = ?")
     .bind(startFen, row.creator, id).run();
-  await notifyUsers(env, [row.creator, row.opponent].filter(Boolean) as string[],
-    { type: "game-start", roomId: id, gameType: row.type, board: startFen, turn: row.creator });
+  const players = await gamePlayers(env, id);
+  await notifyUsers(env, players.map((p) => p.username),
+    { type: "game-start", roomId: id, gameType: row.type, board: startFen, turn: row.creator, players: players.map((p) => p.username) });
   return json({ ok: true, board: startFen });
 }
 
 // 走子：服务端负责「轮次 / 身份 / 状态」校验与广播，规则判定由前端棋类引擎完成
 async function handleGameMove(request: Request, env: Env): Promise<Response> {
+  await ensureGameSchema(env);
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
   let body: { roomId?: string; board?: string };
@@ -3341,23 +3477,26 @@ async function handleGameMove(request: Request, env: Env): Promise<Response> {
     .bind(id).first<{ id: string; type: string; creator: string; opponent: string | null; status: string; board: string | null; turn: string | null }>();
   if (!row) return json({ error: "房间不存在" }, 404);
   if (row.status !== "playing") return json({ error: "棋局尚未开始或已结束" }, 409);
-  if (row.creator !== user.username && row.opponent !== user.username) {
+  const players = await gamePlayers(env, id);
+  if (!players.some((p) => p.username === user.username)) {
     return json({ error: "你不是这局棋的参与者" }, 403);
   }
+  const opponent = await currentOpponent(env, id, row.creator);
   // 轮次校验：只有轮到自己才能走
   if (row.turn && row.turn !== user.username) {
     return json({ error: "还没轮到你走" }, 409);
   }
   const board = String(body.board || "").trim();
   if (!board || board.length > 4000) return json({ error: "局面数据无效" }, 400);
-  const nextTurn = row.creator === user.username ? (row.opponent || "") : row.creator;
+  const nextTurn = row.creator === user.username ? (opponent || "") : row.creator;
   await env.DB.prepare("UPDATE games SET board = ?, turn = ? WHERE id = ?").bind(board, nextTurn, id).run();
-  await notifyUsers(env, [row.creator, row.opponent].filter(Boolean) as string[],
+  await notifyUsers(env, players.map((p) => p.username),
     { type: "game-move", roomId: id, board: board, by: user.username, turn: nextTurn });
   return json({ ok: true, board: board, turn: nextTurn });
 }
 
 async function handleGameEnd(request: Request, env: Env): Promise<Response> {
+  await ensureGameSchema(env);
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
   let body: { roomId?: string; winner?: string; result?: string };
@@ -3369,20 +3508,56 @@ async function handleGameEnd(request: Request, env: Env): Promise<Response> {
   const id = (body.roomId || "").trim().toUpperCase();
   const row = await env.DB.prepare("SELECT id, type, creator, opponent, status FROM games WHERE id = ?").bind(id).first<{ id: string; type: string; creator: string; opponent: string | null; status: string }>();
   if (!row) return json({ error: "房间不存在" }, 404);
-  if (row.creator !== user.username) return json({ error: "只有房主可以结束房间" }, 403);
+  // 房主与对手都可以结束本局（对手不想继续时可主动结束）
+  if (row.creator !== user.username && row.opponent !== user.username) {
+    return json({ error: "只有房间内的玩家可以结束本局" }, 403);
+  }
   if (row.status === "ended") return json({ ok: true });
   // winner：'a' = 房主胜、'b' = 对手胜、'draw' = 和棋；缺省视为房主认输结束
   const w = String(body.winner || "");
   const winner = w === "b" ? (row.opponent || "") : (w === "a" ? row.creator : (w === "draw" ? "draw" : null));
-  await env.DB.prepare("UPDATE games SET status = 'ended', winner = ? WHERE id = ?").bind(winner, id).run();
-  await notifyUsers(env, [row.creator, row.opponent].filter(Boolean) as string[],
-    { type: "game-end", roomId: id, winner: winner, result: String(body.result || "") });
-  return json({ ok: true });
+  const resultText = String(body.result || "");
+  await env.DB.prepare("UPDATE games SET status = 'ended', winner = ?, result = ? WHERE id = ?")
+    .bind(winner, resultText, id).run();
+  const players = await gamePlayers(env, id);
+  const names = players.map((p) => p.username);
+  await notifyUsers(env, names,
+    { type: "game-end", roomId: id, winner: winner, result: resultText, players: names });
+  return json({ ok: true, winner: winner, result: resultText });
+}
+
+// 再来一局：房主把房间重置到「等待开始」，同一个对手可以继续下
+async function handleGameRestart(request: Request, env: Env): Promise<Response> {
+  await ensureGameSchema(env);
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  let body: { roomId?: string };
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "请求格式错误" }, 400);
+  }
+  const id = (body.roomId || "").trim().toUpperCase();
+  const row = await env.DB.prepare("SELECT id, type, creator, opponent, status FROM games WHERE id = ?").bind(id).first<{ id: string; type: string; creator: string; opponent: string | null; status: string }>();
+  if (!row) return json({ error: "房间不存在" }, 404);
+  if (row.creator !== user.username) return json({ error: "只有房主可以开下一局" }, 403);
+  const opponent = await currentOpponent(env, id, row.creator);
+  if (!opponent) return json({ error: "还没有对手，先等别人加入" }, 409);
+  const startFen = row.type === "xiangqi"
+    ? "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR r"
+    : "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+  await env.DB.prepare("UPDATE games SET status = 'ready', board = ?, turn = ?, winner = NULL, result = NULL WHERE id = ?")
+    .bind(startFen, row.creator, id).run();
+  const players = await gamePlayers(env, id);
+  await notifyUsers(env, players.map((p) => p.username),
+    { type: "game-restart", roomId: id, board: startFen, turn: row.creator });
+  return json({ ok: true, board: startFen });
 }
 
 // 删除房间：房主可删除自己的房间（任意状态，含已结束）
 // 作用：房间打完后能把房间号释放掉，避免「这局早就结束了却一直显示已满、还删不掉」。
 async function handleGameDelete(request: Request, env: Env): Promise<Response> {
+  await ensureGameSchema(env);
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
   let body: { roomId?: string };
@@ -3396,19 +3571,27 @@ async function handleGameDelete(request: Request, env: Env): Promise<Response> {
   if (!row) return json({ error: "房间不存在" }, 404);
   if (row.creator !== user.username) return json({ error: "只有房主可以删除房间" }, 403);
   // 消消乐是单人局，房主就是唯一玩家，直接删
-  // 棋类：双方都同意才能删，避免对手还在房里却被强行踢出
+  // 棋类：对手仍在房 → 先把本局结束（通知对手），再删房间。
+  //       房主主动删房 = 终止当前对局，这是房主的权限，不做阻拦。
   if (row.opponent && row.status !== "ended") {
-    return json({ error: "对手还在房间里，等这局结束或让对手先离开再删除" }, 409);
+    await env.DB.prepare("UPDATE games SET status = 'ended', result = ? WHERE id = ?")
+      .bind("房主删除了房间", id).run();
   }
+  // ⚠️ 先取玩家名单再删表：gamePlayers 依赖 games 行的 creator
+  const players = await gamePlayers(env, id);
+  const notifyList = players.map((p) => p.username)
+    .concat([row.opponent].filter(Boolean) as string[])
+    .filter((u, i, arr) => u && arr.indexOf(u) === i);
   await env.DB.prepare("DELETE FROM games WHERE id = ?").bind(id).run();
+  await env.DB.prepare("DELETE FROM game_seats WHERE room_id = ?").bind(id).run();
   await env.DB.prepare("DELETE FROM game_requests WHERE room_id = ?").bind(id).run();
-  await notifyUsers(env, [row.creator, row.opponent].filter(Boolean) as string[],
-    { type: "game-deleted", roomId: id });
+  await notifyUsers(env, notifyList, { type: "game-deleted", roomId: id });
   return json({ ok: true });
 }
 
 // 离开房间：对局尚未开始时，退出即释放座位（否则房间号一直显示「已满」）
 async function handleGameLeave(request: Request, env: Env): Promise<Response> {
+  await ensureGameSchema(env);
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
   let body: { roomId?: string };
@@ -3420,40 +3603,63 @@ async function handleGameLeave(request: Request, env: Env): Promise<Response> {
   const id = (body.roomId || "").trim().toUpperCase();
   const row = await env.DB.prepare("SELECT id, creator, opponent, status FROM games WHERE id = ?").bind(id).first<{ id: string; creator: string; opponent: string | null; status: string }>();
   if (!row) return json({ error: "房间不存在" }, 404);
-  // 对手离开：释放座位，房间回到「等待加入」
-  // ⚠️ 状态要覆盖 waiting 与 ready 两种：对手付完钱后房间已转为 ready，
-  //    此时对手离开同样应释放座位，否则房间号会一直卡在「已满」。
-  if (row.opponent === user.username && (row.status === "waiting" || row.status === "ready")) {
-    await env.DB.prepare("UPDATE games SET opponent = NULL, payer = NULL, status = 'waiting' WHERE id = ?").bind(id).run();
+  // 对手离开：释放座位 → 房间回到「等待加入」，别人可随时补位 / 换对手
+  // ⚠️ 状态不再做限制：对局中（playing）离开同样释放座位，
+  //    这样「打完一局 → 换个人接着下」不用重开房间。
+  if (row.opponent === user.username || (await hasSeat(env, id, user.username))) {
+    await env.DB.prepare("DELETE FROM game_seats WHERE room_id = ? AND username = ?").bind(id, user.username).run();
+    const opp = await currentOpponent(env, id, row.creator);
+    await env.DB.prepare("UPDATE games SET opponent = ?, payer = NULL, status = 'waiting' WHERE id = ?").bind(opp, id).run();
     await notifyUsers(env, [row.creator], { type: "game-leave", roomId: id, opponent: user.username });
     return json({ ok: true, released: true });
   }
-  // 房主离开：直接删掉还没开的房间
-  if (row.creator === user.username && (row.status === "waiting" || row.status === "ready")) {
+  // 房主离开：房间直接删掉（对手会被通知退出）
+  if (row.creator === user.username) {
     await env.DB.prepare("DELETE FROM games WHERE id = ?").bind(id).run();
+    await env.DB.prepare("DELETE FROM game_seats WHERE room_id = ?").bind(id).run();
     await env.DB.prepare("DELETE FROM game_requests WHERE room_id = ?").bind(id).run();
     await notifyUsers(env, [row.opponent].filter(Boolean) as string[], { type: "game-deleted", roomId: id });
     return json({ ok: true });
   }
-  // 对局中/已结束：只让前端退出页面，不动数据
   return json({ ok: true, released: false });
+}
+
+// 该用户名是否占用房间座位
+async function hasSeat(env: Env, roomId: string, username: string): Promise<boolean> {
+  try {
+    const r = await env.DB.prepare("SELECT 1 AS x FROM game_seats WHERE room_id = ? AND username = ?")
+      .bind(roomId, username).first<{ x: number }>();
+    return !!r;
+  } catch {
+    return false;
+  }
 }
 
 // 游戏费率查询：前端用它渲染价格文案，保证「看到的价」=「实际扣的价」
 async function handleGameFees(request: Request, env: Env): Promise<Response> {
+  await ensureGameSchema(env);
   return json({ ok: true, fees: GAME_FEES });
 }
 
 async function handleGameState(request: Request, env: Env): Promise<Response> {
+  await ensureGameSchema(env);
   const user = await authUser(request, env);
   if (!user) return json({ error: "未登录" }, 401);
   const url = new URL(request.url);
   const id = (url.searchParams.get("roomId") || "").trim().toUpperCase();
   const row = await env.DB.prepare(
-    "SELECT id, type, creator, opponent, status, payer, turn, winner, board FROM games WHERE id = ?"
-  ).bind(id).first<{ id: string; type: string; creator: string; opponent: string | null; status: string; payer: string | null; turn: string | null; winner: string | null; board: string | null }>();
+    "SELECT id, type, creator, opponent, status, payer, turn, winner, board, result FROM games WHERE id = ?"
+  ).bind(id).first<{ id: string; type: string; creator: string; opponent: string | null; status: string; payer: string | null; turn: string | null; winner: string | null; board: string | null; result: string | null }>();
   if (!row) return json({ error: "房间不存在" }, 404);
-  return json({ game: row, iAm: user.username, iAmCreator: row.creator === user.username });
+  const players = await gamePlayers(env, id);
+  return json({
+    game: row,
+    players: players.map((p) => p.username),
+    seats: players.map((p) => ({ username: p.username, seat: p.seat })),
+    freeSeat: freeSeat(players),
+    iAm: user.username,
+    iAmCreator: row.creator === user.username
+  });
 }
 
 export default {
@@ -3510,6 +3716,7 @@ export default {
     if (url.pathname === "/api/game/fees" && request.method === "GET") return handleGameFees(request, env);
     if (url.pathname === "/api/game/delete" && request.method === "POST") return handleGameDelete(request, env);
     if (url.pathname === "/api/game/leave" && request.method === "POST") return handleGameLeave(request, env);
+    if (url.pathname === "/api/game/restart" && request.method === "POST") return handleGameRestart(request, env);
     if (url.pathname === "/api/rooms" && request.method === "GET") return handleRoomsList(request, env);
     if (url.pathname === "/api/rooms/create" && request.method === "POST") return handleRoomCreate(request, env);
     if (url.pathname === "/api/rooms/history" && request.method === "GET") return handleRoomHistory(request, env);
