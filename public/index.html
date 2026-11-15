@@ -1579,6 +1579,8 @@
   var ws = null;
   var reconnectTimer = null;
   var currentRoom = '';
+  var pendingJoinRoom = null;   // 待发送 join-room 的房间（WS 未就绪时排队）
+  var joinRetryTimer = null;    // 进房回执超时重试定时器
   var roomsData = [];
   var roomItems = document.getElementById('roomItems');
   var roomListPage = document.getElementById('roomListPage');
@@ -1773,6 +1775,7 @@
     if (!animate) div.style.animation = 'none';
     messages.appendChild(div);
     scrollBottom();
+    return div;
   }
   function appendSys(text) {
     var empty = messages.querySelector('.empty');
@@ -1834,7 +1837,18 @@
     setConn(false, '连接中…');
     var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
     ws = new WebSocket(proto + location.host + '/room?token=' + encodeURIComponent(token));
-    ws.onopen = function () { setConn(true); loadRooms(); if (currentRoom) ws.send(JSON.stringify({ type: 'join-room', room: currentRoom })); };
+    ws.onopen = function () {
+      setConn(true); loadRooms();
+      // WS 就绪后补发排队中的进房请求（首屏进房/瞬时断线重连都走这里）
+      if (pendingJoinRoom) trySendJoin();
+      else if (currentRoom) { pendingJoinRoom = currentRoom; trySendJoin(); }
+      // 重连后，之前未收到 file-done 回执的上传无法确定服务端是否落库，诚实提示刷新确认
+      Object.keys(pendingUploads).forEach(function (k) {
+        var d = messages.querySelector('[data-file="' + k + '"] .f-size');
+        if (d) d.textContent = fmtSize(pendingUploads[k].f.size) + ' · 连接曾中断，请刷新页面确认是否送达';
+        delete pendingUploads[k];
+      });
+    };
     ws.onclose = function () {
       setConn(false, '已断开 · 重连中');
       clearTimeout(reconnectTimer);
@@ -1855,6 +1869,8 @@
       try { d = JSON.parse(e.data); } catch (err) { return; }
       if (d.type === 'history') {
         currentRoom = d.room;
+        pendingJoinRoom = null;
+        if (joinRetryTimer) { clearTimeout(joinRetryTimer); joinRetryTimer = null; }
         messages.innerHTML = '';
         if (d.messages && d.messages.length) {
           d.messages.forEach(function (m) {
@@ -1880,7 +1896,26 @@
         }
         loadRooms();
       } else if (d.type === 'msg') {
+        // 用服务端回执的 cid 去重：自己发的消息已乐观上屏，避免重复追加
+        if (d.cid) {
+          var existing = messages.querySelector('[data-cid="' + d.cid + '"]');
+          if (existing) { existing.classList.remove('msg-failed', 'msg-pending'); return; }
+        }
         appendMsg({ sender: d.sender, role: d.role, text: d.text, time: nowTime(), self: d.sender === me }, true);
+      } else if (d.type === 'file-done') {
+        // 发送方以服务端回执为准：仅回执 ok 才确认“已发送/已扣费”，否则明确报错
+        var pu = pendingUploads[d.id];
+        var localF = pu ? pu.f : null;
+        var fdiv = messages.querySelector('[data-file="' + d.id + '"]');
+        if (d.ok) {
+          fileDone(d.id, localF ? URL.createObjectURL(localF) : null, d.name, d.size, true);
+          appendSys('文件已保存' + (d.cost > 0 ? ('（上传扣除 ' + d.cost + ' Credits）') : ''));
+          refreshMe();
+        } else {
+          appendSys('文件发送失败：' + (d.error || '未知错误'));
+          if (fdiv) { var fsz = fdiv.querySelector('.f-size'); if (fsz) fsz.textContent = '上传失败'; fdiv.classList.add('msg-failed'); }
+        }
+        if (pu) delete pendingUploads[d.id];
       } else if (d.type === 'file-start') {
         recvState = { fileId: d.id, name: d.name, size: d.size, mime: d.mime, chunks: [], received: 0 };
         buildFileMsg({ self: false, sender: d.sender || '对方', time: nowTime(), name: d.name, size: d.size, mime: d.mime, fileId: d.id, role: d.role });
@@ -1894,6 +1929,10 @@
           recvState = null;
         }
       } else if (d.type === 'sys') {
+        if (d.cid) {
+          var pend = messages.querySelector('[data-cid="' + d.cid + '"]');
+          if (pend) { pend.classList.remove('msg-pending'); pend.classList.add('msg-failed'); var pb = pend.querySelector('.body'); if (pb) pb.textContent = (pb.textContent || '') + ' ⚠ ' + d.text; }
+        }
         if (cmdPendingTimer) { clearTimeout(cmdPendingTimer); cmdPendingTimer = null; }
         if (inCmdPage || (cmdPanel && !cmdPanel.classList.contains('hidden'))) appendCmdLine(d.text);
         else appendSys(d.text);
@@ -2004,17 +2043,29 @@
 
   function send() {
     var text = msgInput.value.trim();
-    if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!text) return;
     if (text.charAt(0) === '/') {
       appendSys('命令行已关闭，请使用系统控制面板与各功能面板完成操作');
       msgInput.value = '';
       autoGrowInput();
       return;
     }
-    ws.send(JSON.stringify({ text: text }));
+    if (!currentRoom) { appendSys('请先进入一个房间再发言'); return; }
+    // 乐观上屏 + 服务端回执去重：cid 用于把“自己发的消息”与“服务端回显”对应起来
+    var cid = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    var node = appendMsg({ sender: me, role: meRole, text: text, time: nowTime(), self: true }, true);
+    if (node) { node.setAttribute('data-cid', cid); node.classList.add('msg-pending'); }
     msgInput.value = '';
     autoGrowInput();
     msgInput.focus();
+    try {
+      if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error('offline');
+      ws.send(JSON.stringify({ text: text, cid: cid }));
+    } catch (e) {
+      // 发送失败：不丢弃，标记为未发送并保留原文，便于用户重发
+      if (node) { node.classList.remove('msg-pending'); node.classList.add('msg-failed'); var nb = node.querySelector('.body'); if (nb) nb.textContent = text + ' ⚠ 未发送（连接中断，请重发）'; }
+      return;
+    }
     // 计费房间发言后刷新余额显示（实际扣费以服务端为准）
     if (currentRoom && currentRoom !== 'geek') {
       refreshMe();
@@ -2925,6 +2976,7 @@
   var CHUNK = 64 * 1024;
   var transferring = 0;
   var recvState = null;
+  var pendingUploads = {};   // 进行中的上传：fileId -> { f, cost }，供 file-done 回执回填本地预览
 
   function detectMaxFile() {
     var mem = navigator.deviceMemory || 4;          // GB，未上报则按宽松处理
@@ -2935,7 +2987,7 @@
     if (w >= 1024) return 120 * 1024 * 1024;             // iPad / 大屏触控：120MB
     return 80 * 1024 * 1024;                             // 普通手机/平板：80MB
   }
-  var MAX_FILE = detectMaxFile();
+  var MAX_FILE = 20 * 1024 * 1024; // 聊天内联文件上限：与后端 CHAT_FILE_CAP(20MB) 对齐，超出请走云存储/文件商店
   btnFile.title = '发送文件（≤' + fmtSize(MAX_FILE) + '）';
 
   function fmtSize(n) {
@@ -3264,6 +3316,7 @@
   function startUpload(f, uploadCost) {
     if (!ws || ws.readyState !== WebSocket.OPEN) { appendSys('连接已断开，请稍后重试'); return; }
     var fileId = 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    pendingUploads[fileId] = { f: f, cost: uploadCost };
     buildFileMsg({ self: true, sender: me, time: nowTime(), name: f.name, size: f.size, mime: f.type, fileId: fileId, role: meRole });
     setTransferring(1);
     ws.send(JSON.stringify({ type: 'file-start', id: fileId, name: f.name, size: f.size, mime: f.type || 'application/octet-stream' }));
@@ -3272,17 +3325,20 @@
       if (offset >= f.size) {
         ws.send(JSON.stringify({ type: 'file-end', id: fileId }));
         setTransferring(-1);
-        // 上传方本地卡片补完成态（自己的文件下载免费）
-        fileDone(fileId, URL.createObjectURL(f), f.name, f.size, true);
-        if (uploadCost > 0) {
-          appendSys('文件已发送（上传扣除 ' + uploadCost + ' Credits · 按本群文件计费标准）');
-          refreshMe();
-        }
+        // 不在此乐观判定成功：等待服务端 file-done 回执（落库+扣费完成后才确认）
+        var cd = messages.querySelector('[data-file="' + fileId + '"] .f-size');
+        if (cd) cd.textContent = fmtSize(f.size) + ' · 等待服务器确认…';
         return;
       }
       var reader = new FileReader();
       reader.onload = function () {
-        if (ws.readyState !== WebSocket.OPEN) { setTransferring(-1); return; }
+        if (ws.readyState !== WebSocket.OPEN) {
+          setTransferring(-1);
+          try { ws.send(JSON.stringify({ type: 'file-abort', id: fileId })); } catch (e) {}
+          if (pendingUploads[fileId]) delete pendingUploads[fileId];
+          appendSys('上传中断：连接已断开，文件未发送');
+          return;
+        }
         ws.send(reader.result);
         offset += CHUNK;
         fileProgress(fileId, offset / f.size * 100);
@@ -3290,6 +3346,7 @@
       };
       reader.onerror = function () {
         setTransferring(-1);
+        if (pendingUploads[fileId]) delete pendingUploads[fileId];
         appendSys('文件读取失败：' + f.name);
       };
       reader.readAsArrayBuffer(f.slice(offset, offset + CHUNK));
@@ -3330,6 +3387,26 @@
       roomItems.appendChild(item);
     });
   }
+  // 进房请求：WS 未就绪时排队，待 onopen 补发；并带超时重试，避免“进入会话中…”卡死需强刷
+  function ensureJoined(id) {
+    pendingJoinRoom = id;
+    trySendJoin();
+  }
+  function trySendJoin() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return; // 等 onopen 补发
+    if (!pendingJoinRoom) return;
+    ws.send(JSON.stringify({ type: 'join-room', room: pendingJoinRoom }));
+    scheduleJoinRetry();
+  }
+  function scheduleJoinRetry() {
+    if (joinRetryTimer) clearTimeout(joinRetryTimer);
+    joinRetryTimer = setTimeout(function () {
+      if (pendingJoinRoom && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'join-room', room: pendingJoinRoom }));
+        scheduleJoinRetry();
+      }
+    }, 2500);
+  }
   function joinRoom(id) {
     currentRoom = id;
     var found = null;
@@ -3353,11 +3430,11 @@
       }
     }).catch(function () {});
     messages.innerHTML = '<div class="empty">进入会话中…</div>';
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'join-room', room: id }));
-    }
+    ensureJoined(id);
   }
   document.getElementById('btnBackRooms').addEventListener('click', function () {
+    pendingJoinRoom = null;
+    if (joinRetryTimer) { clearTimeout(joinRetryTimer); joinRetryTimer = null; }
     showChatPage('list');
     loadRooms();
   });

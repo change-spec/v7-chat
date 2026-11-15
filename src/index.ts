@@ -3451,7 +3451,7 @@ export class Room {
       }
       return;
     }
-    let data: { text?: string; type?: string; room?: string; id?: string; name?: string; size?: number; mime?: string };
+    let data: { text?: string; type?: string; room?: string; id?: string; name?: string; size?: number; mime?: string; cid?: string };
     try {
       data = JSON.parse(message);
     } catch {
@@ -3495,18 +3495,15 @@ export class Room {
         }
         const size = Math.max(0, Number(data.size) || 0);
         // 文件上传计费：按该群自定义倍率（每 MB 单价）；geek 公告群倍率 0 → 免费
-        if (data.type === "file-start") {
-          const rates = await roomRates(this.env, room);
-          const cost = fileFeeFor(size, rates.fileRate);
-          if (cost > 0) {
-            if (!(await spendCredits(this.env, user.username, cost))) {
-              this.sendTo(ws, { type: "sys", text: "Credits 不足：上传文件需 " + cost + " Credits（每MB " + rates.fileRate + "Credits，当前文件 " + fmtBytes(size) + "）" });
-              return;
-            }
-            await logCredits(this.env, user.username, -cost, "文件上传");
+        if (data.type === "file-abort") {
+          const ab = this.fileBuf.get(ws);
+          if (ab && ab.id === String(data.id)) {
+            this.fileBuf.delete(ws);
+            await this.env.DB.prepare("DELETE FROM chat_file_chunks WHERE file_id = ?").bind(ab.id).run().catch(() => {});
           }
+          return;
         }
-        // 准备服务端落盘缓冲（作为聊天记录保留 7 天，与 messages 同步清理）；分块在收到时即时落库
+        // 计费延后到 file-end 持久化成功之后：避免「已扣费却未落库」导致刷新后文件消失、积分白扣
         if (data.type === "file-start") {
           this.fileBuf.set(ws, {
             id: String(data.id),
@@ -3519,6 +3516,7 @@ export class Room {
             role: user.role
           });
         }
+        // 转发给同房其他人（不含发送者）；发送者以 file-done 回执为准
         this.broadcastToRoom({
           type: data.type,
           id: data.id,
@@ -3529,30 +3527,52 @@ export class Room {
           role: user.role,
           room: room
         }, room, ws);
-        // 文件收尾：从 chat_file_chunks 按 seq 拼回字节，落地进 chat_files，并写入一条文件消息记录（历史可见，7 天后自动清除）
         if (data.type === "file-end") {
           const acq = this.fileBuf.get(ws);
-          if (acq) {
-            this.fileBuf.delete(ws);
-            try {
-              if (acq.size <= CHAT_FILE_CAP) {
-                const { results } = await this.env.DB.prepare(
-                  "SELECT data FROM chat_file_chunks WHERE file_id = ? ORDER BY seq ASC"
-                ).bind(acq.id).all<{ data: string }>();
-                const parts = (results || []).map((r) => base64ToBytes(r.data));
-                const bytes = concatBytes(parts);
-                const b64 = bytesToBase64(bytes);
-                const now = new Date().toISOString();
-                await this.env.DB.prepare(
-                  "INSERT OR REPLACE INTO chat_files (id, room, sender, name, size, mime, data, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-                ).bind(acq.id, acq.room, acq.sender, acq.name, acq.size, acq.mime, b64, now).run();
-                await this.env.DB.prepare("DELETE FROM chat_file_chunks WHERE file_id = ?").bind(acq.id).run();
-                const marker = JSON.stringify({ __file: 1, id: acq.id, name: acq.name, size: acq.size, mime: acq.mime });
-                await this.env.DB.prepare("INSERT INTO messages (room, sender, role, text, ts) VALUES (?, ?, ?, ?, ?)")
-                  .bind(acq.room, acq.sender, acq.role, marker, now).run();
-                await purgeOldMessages(this.env);
+          this.fileBuf.delete(ws);
+          if (!acq) {
+            this.sendTo(ws, { type: "file-done", id: String(data.id), ok: false, error: "上传会话已失效，请重试" });
+            return;
+          }
+          // 超过聊天落地上限：明确报错，不入库、不扣费（前端已对齐 20MB，此分支为兜底）
+          if (acq.size > CHAT_FILE_CAP) {
+            await this.env.DB.prepare("DELETE FROM chat_file_chunks WHERE file_id = ?").bind(acq.id).run().catch(() => {});
+            this.sendTo(ws, { type: "file-done", id: acq.id, ok: false, error: "文件 " + fmtBytes(acq.size) + " 超过聊天单文件上限 " + (CHAT_FILE_CAP / 1048576) + "MB，无法在聊天中保存（请用云存储）" });
+            return;
+          }
+          try {
+            const { results } = await this.env.DB.prepare(
+              "SELECT data FROM chat_file_chunks WHERE file_id = ? ORDER BY seq ASC"
+            ).bind(acq.id).all<{ data: string }>();
+            const parts = (results || []).map((r) => base64ToBytes(r.data));
+            const bytes = concatBytes(parts);
+            if (bytes.length !== acq.size) throw new Error("分片缺失或长度不符（" + bytes.length + "/" + acq.size + "）");
+            const b64 = bytesToBase64(bytes);
+            const now = new Date().toISOString();
+            await this.env.DB.prepare(
+              "INSERT OR REPLACE INTO chat_files (id, room, sender, name, size, mime, data, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            ).bind(acq.id, acq.room, acq.sender, acq.name, acq.size, acq.mime, b64, now).run();
+            await this.env.DB.prepare("DELETE FROM chat_file_chunks WHERE file_id = ?").bind(acq.id).run();
+            const marker = JSON.stringify({ __file: 1, id: acq.id, name: acq.name, size: acq.size, mime: acq.mime });
+            await this.env.DB.prepare("INSERT INTO messages (room, sender, role, text, ts) VALUES (?, ?, ?, ?, ?)")
+              .bind(acq.room, acq.sender, acq.role, marker, now).run();
+            await purgeOldMessages(this.env);
+            // 持久化成功后再计费；余额不足则回滚已写入的文件与消息，保证「扣费 ⟺ 落库」
+            const rates = await roomRates(this.env, acq.room);
+            const cost = fileFeeFor(acq.size, rates.fileRate);
+            if (cost > 0) {
+              if (!(await spendCredits(this.env, acq.sender, cost))) {
+                await this.env.DB.prepare("DELETE FROM chat_files WHERE id = ?").bind(acq.id).run().catch(() => {});
+                await this.env.DB.prepare("DELETE FROM messages WHERE room = ? AND text = ?").bind(acq.room, marker).run().catch(() => {});
+                this.sendTo(ws, { type: "file-done", id: acq.id, ok: false, error: "Credits 不足：上传需 " + cost + " Credits" });
+                return;
               }
-            } catch {}
+              await logCredits(this.env, acq.sender, -cost, "文件上传");
+            }
+            this.sendTo(ws, { type: "file-done", id: acq.id, ok: true, cost, name: acq.name, size: acq.size });
+          } catch (e) {
+            await this.env.DB.prepare("DELETE FROM chat_file_chunks WHERE file_id = ?").bind(acq.id).run().catch(() => {});
+            this.sendTo(ws, { type: "file-done", id: acq.id, ok: false, error: "文件保存失败：" + (e && e.message ? e.message : "服务器错误") });
           }
         }
         return;
@@ -3569,19 +3589,19 @@ export class Room {
 
     const room = this.roomOf.get(ws) || "";
     if (!room || !(await isMember(this.env.DB, room, user.username))) {
-      this.sendTo(ws, { type: "sys", text: "请先进入一个房间再发言" });
+      this.sendTo(ws, { type: "sys", text: "请先进入一个房间再发言", cid: data.cid });
       return;
     }
 
     // 公告群：仅 Root-Admin 可发言，其他成员只能阅读
     if (room === "geek" && user.role !== "root-admin") {
-      this.sendTo(ws, { type: "sys", text: "Geek公告群仅 Root-Admin 可发布消息，其他成员只能阅读" });
+      this.sendTo(ws, { type: "sys", text: "Geek公告群仅 Root-Admin 可发布消息，其他成员只能阅读", cid: data.cid });
       return;
     }
 
     // 观测者只能围观，例外：与 Root-Admin 的私聊（dm:<用户名>）里可以发言
     if (user.role === "observer" && room !== "dm:" + user.username) {
-      this.sendTo(ws, { type: "sys", text: "观测者只能围观，仅可在「与 Root-Admin 的私聊」里发言" });
+      this.sendTo(ws, { type: "sys", text: "观测者只能围观，仅可在「与 Root-Admin 的私聊」里发言", cid: data.cid });
       return;
     }
 
@@ -3592,7 +3612,7 @@ export class Room {
       if (mute) {
         const untilMs = new Date(mute.until).getTime();
         if (untilMs > Date.now()) {
-          this.sendTo(ws, { type: "sys", text: "你已被禁言（至 " + mute.until.slice(0, 16).replace("T", " ") + "），期间不能发言" });
+          this.sendTo(ws, { type: "sys", text: "你已被禁言（至 " + mute.until.slice(0, 16).replace("T", " ") + "），期间不能发言", cid: data.cid });
           return;
         }
       }
@@ -3618,7 +3638,7 @@ export class Room {
         .bind(curRoom, user.username, user.role, text, ts).run();
       await purgeOldMessages(this.env);
     });
-    this.broadcastToRoom({ type: "msg", sender: user.username, role: user.role, text, ts, room: curRoom }, curRoom);
+    this.broadcastToRoom({ type: "msg", sender: user.username, role: user.role, text, ts, room: curRoom, cid: data.cid }, curRoom);
   }
 
   private async handleCommand(ws: WebSocket, user: RoomUser, raw: string): Promise<void> {
