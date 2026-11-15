@@ -371,6 +371,19 @@
   .cb-settle .s-p.winner .nm { color: #6cffc4; }
   .cb-settle .s-acts { margin-top: 13px; display: flex; gap: 9px; justify-content: center; flex-wrap: wrap; }
   .cb-settle .s-note { margin-top: 9px; font-size: 11px; color: var(--dim); line-height: 1.7; }
+  /* ===== 下一局付费确认卡 ===== */
+  .cb-needpay {
+    margin: 14px auto 4px; max-width: 420px; width: 100%;
+    border: 1px solid rgba(255,184,0,.5); border-radius: 10px;
+    background: linear-gradient(180deg, rgba(255,184,0,.12), rgba(0,0,0,.42));
+    box-shadow: 0 0 26px rgba(255,184,0,.25), inset 0 0 20px rgba(255,184,0,.08);
+    padding: 16px; text-align: center;
+    animation: settleIn .34s cubic-bezier(.2,.9,.25,1);
+  }
+  .cb-needpay .np-title { font-size: 17px; font-weight: 700; color: #ffd76a; letter-spacing: 1px; text-shadow: 0 0 14px rgba(255,184,0,.6); }
+  .cb-needpay .np-sub { margin-top: 7px; font-size: 12.5px; color: var(--dim); line-height: 1.8; }
+  .cb-needpay .np-sub b { color: #ffd76a; font-weight: 400; }
+  .cb-needpay .np-acts { margin-top: 13px; display: flex; gap: 9px; justify-content: center; flex-wrap: wrap; }
   .cb-tip { text-align: center; font-size: 12px; color: var(--dim); padding: 2px 0 0; }
   .board-area {
     min-height: 240px; border: 1px solid var(--line); border-radius: 10px;
@@ -1114,12 +1127,10 @@
         <span class="hint" style="margin:0">已就座 · 等待房主开始棋局…</span>
       </div>
       <div class="tool-row" id="roomOwnerBtns" style="display:none">
-        <button class="btn small magenta" id="btnGameDelete">🗑 删除房间</button>
-        <span class="hint" style="margin:0">删除后房间号立即释放，别人再加入会提示「房间不存在」</span>
+        <span class="hint" style="margin:0">房主 · 退出房间即删除该房间号</span>
       </div>
       <div class="tool-row" id="roomGuestBtns" style="display:none">
-        <button class="btn small magenta" id="btnGameEndAsGuest">🏁 结束本局</button>
-        <span class="hint" style="margin:0">你是对手 · 可结束本局，或点下方「离开房间页」换人</span>
+        <span class="hint" style="margin:0">你是对手 · 退出即释放座位，可随时换人</span>
       </div>
       <div class="tool-row"><button class="btn small" id="btnRoomLeave">▸ 离开房间页</button></div>
     </div>
@@ -2618,6 +2629,15 @@
           // ⚠️ 不再自动闪退：结算界面必须留在房间里，用户才能看到胜败并删除房间。
           //    用户可点结算面板上的「返回聊天 / 再来一局 / 删除房间」。
         }
+      } else if (d.type === 'game-needpay') {
+        // 房主要开下一局 → 对手需要重新付费
+        if (currentGame && d.roomId === currentGame.roomId) {
+          setRoomStatus('waiting');
+          if (!currentGame.iAmCreator) {
+            cbNeedPay(d.fee || feeOf(currentGame.type), d.by);
+            appendSys('对方要开下一局，支付 ' + (d.fee || feeOf(currentGame.type)) + ' Credits 后继续');
+          }
+        }
       } else if (d.type === 'game-restart') {
         if (currentGame && d.roomId === currentGame.roomId) {
           var box = document.querySelector('.cb-settle');
@@ -2879,17 +2899,9 @@
     showGamePanel(null);
   }
 
-  // 删除房间（房主）：房间号立即释放
-  document.getElementById('btnGameDelete').addEventListener('click', function () { doDeleteRoom(); });
-
-  // 对手「结束本局」：结束对局（不删房间，房主可继续换对手）
-  document.getElementById('btnGameEndAsGuest').addEventListener('click', async function () {
-    if (!currentGame || currentGame.iAmCreator) return;
-    try {
-      var r = await api('/api/game/end', { roomId: currentGame.roomId, result: '对手结束本局' });
-      if (!r.ok) appendSys(r.data.error || '结束失败');
-    } catch (e) { appendSys('网络错误'); }
-  });
+  // ⚠️ 「删除房间」与对手的「结束本局」按钮已移除：
+  //    房间由「房主退出房间」自动删除（服务端 handleGameLeave 已实现）；
+  //    对手不能结束本局 —— 那是房主的权限。
 
   // 购买房间号：SHOP（data-shop-buy）与游戏大厅（data-game-buy）共用
   async function buyGameRoom(type) {
@@ -3585,18 +3597,17 @@
         (currentGame && currentGame.iAmCreator
           ? '<button class="btn small" id="cbAgainBtn" type="button">🔄 再来一局</button>' : '') +
         '<button class="btn small" id="cbSettleLeaveBtn" type="button">▸ 返回聊天</button>' +
-        (currentGame && currentGame.iAmCreator
-          ? '<button class="btn small magenta" id="cbSettleDelBtn" type="button">🗑 删除房间</button>' : '') +
       '</div>' +
-      '<div class="s-note">房间号 <b>' + escHtml(currentGame ? currentGame.roomId : '') + '</b> 仍然有效 · 可把这个房间号发给下一位对手直接换人对弈</div>';
+      '<div class="s-note">房间号 <b>' + escHtml(currentGame ? currentGame.roomId : '') + '</b> 仍然有效 · 可把这个房间号发给下一位对手直接换人对弈' +
+        (currentGame && currentGame.iAmCreator
+          ? '<br>每一局对手都需要重新付费才能开局' : '') +
+      '</div>';
     wrap.appendChild(box);
 
     var again = document.getElementById('cbAgainBtn');
     if (again) again.addEventListener('click', function () { cbRestart(); });
     var lv = document.getElementById('cbSettleLeaveBtn');
-    if (lv) lv.addEventListener('click', function () { exitGameRoom(); });
-    var dl = document.getElementById('cbSettleDelBtn');
-    if (dl) dl.addEventListener('click', function () { doDeleteRoom(); });
+    if (lv) lv.addEventListener('click', function () { leaveRoomAndExit(); });
 
     appendSys('棋局结束 · ' + title + '（' + (reason || '棋局结束') + '）');
   }
@@ -3608,6 +3619,7 @@
   }
 
   // 再来一局（房主）：重置局面，同一对手继续下
+  // 再来一局：向对手发起下一局的收费请求（对手付款后才能开局）
   function cbRestart() {
     if (!currentGame || !currentGame.iAmCreator) return;
     api('/api/game/restart', { roomId: currentGame.roomId }).then(function (r) {
@@ -3622,15 +3634,52 @@
       cb.moves = null;
       cb.keys = [];
       cb.lastMove = null;
-      cb.st = cb.G.parse(r.data.board);
-      cbLastBoard = r.data.board;
-      setRoomStatus('ready');
       cbRender();
-      appendSys('已重置局面，房主可以点「开始棋局」开下一局');
+      setRoomStatus('waiting');
+      appendSys('已向对手发起下一局 · 等对手支付 ' + (r.data.fee || feeOf(currentGame.type)) +
+        ' Credits 后即可开始（每局都要重新收费）');
     }).catch(function () { appendSys('网络错误'); });
   }
 
-  // 删除房间（房主）：抽出来给按钮和结算面板共用
+  // 对手收到「下一局需付费」请求：弹出确认，付款后房间才能开局
+  function cbNeedPay(fee, by) {
+    var wrap = document.getElementById('cbWrap');
+    if (!wrap) return;
+    var old = wrap.querySelector('.cb-needpay');
+    if (old) old.remove();
+    var box = document.createElement('div');
+    box.className = 'cb-needpay';
+    box.innerHTML =
+      '<div class="np-title">💰 对方要开下一局</div>' +
+      '<div class="np-sub">' + escHtml(String(by || '房主')) + ' 邀请你继续对弈 · 本局需支付 <b>' + fee + ' Credits</b></div>' +
+      '<div class="np-acts">' +
+        '<button class="btn small magenta" id="npPayBtn" type="button">▸ 支付 ' + fee + ' Credits 继续</button>' +
+        '<button class="btn small" id="npNoBtn" type="button">▸ 暂不</button>' +
+      '</div>';
+    wrap.appendChild(box);
+    document.getElementById('npPayBtn').addEventListener('click', function () {
+      box.remove();
+      api('/api/game/pay-self', { roomId: currentGame.roomId }).then(function (r) {
+        if (!r.ok) { appendSys(r.data.error || '支付失败'); return; }
+        appendSys('已支付 ' + fee + ' Credits，等待房主开始');
+      }).catch(function () { appendSys('网络错误'); });
+    });
+    document.getElementById('npNoBtn').addEventListener('click', function () {
+      box.remove();
+      appendSys('已拒绝本局');
+    });
+  }
+
+  // 离开房间并退出：告知服务端释放座位（房主离开 = 房间号立即删除）
+  function leaveRoomAndExit() {
+    var rid = currentGame && currentGame.roomId;
+    if (rid) {
+      api('/api/game/leave', { roomId: rid }).catch(function () {});
+    }
+    exitGameRoom();
+  }
+
+  // 删除房间（房主）：服务端仍保留该能力（房主退出会自动删除房间）
   function doDeleteRoom() {
     if (!currentGame || !currentGame.iAmCreator) return;
     var rid = currentGame.roomId;
