@@ -25,11 +25,16 @@ async function pickTokens() {
 
 function api(token) {
   return async function (path, body) {
-    const r = await fetch(BASE + path, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
-      body: JSON.stringify(body || {}),
-    });
+    // 无 body → GET（费率查询等只注册了 GET 的端点需要走这条）
+    const opt = { headers: { Authorization: "Bearer " + token } };
+    if (body !== undefined && body !== null) {
+      opt.method = "POST";
+      opt.headers["Content-Type"] = "application/json";
+      opt.body = JSON.stringify(body);
+    } else {
+      opt.method = "GET";
+    }
+    const r = await fetch(BASE + path, opt);
     const j = await r.json().catch(() => ({}));
     return { status: r.status, ok: r.ok, data: j };
   };
@@ -53,6 +58,29 @@ const ok = (c, n, extra) => { if (c) { pass++; console.log("  ✓ " + n); } else
 (async () => {
   const [A, B] = await pickTokens();
   console.log("账号A =", A[0], " 账号B =", B[0]);
+
+  // 预检：价格调整后测试账号余额可能不足以开局（此时失败会被误判成代码 bug）。
+  // 通过 Cloudflare D1 REST API 直接给测试账号补足额度（仅测试用途，不改生产代码）。
+  const feeProbe = await api(A[1])("/api/game/fees");
+  const FEES0 = (feeProbe.data && feeProbe.data.fees) || {};
+  const needPer = Math.max(FEES0.match3 || 0, FEES0.chess || 0, FEES0.xiangqi || 0) * 2 + 50;
+  const cfTok = process.env.V7_CF_TOKEN || "";
+  const acct = process.env.V7_CF_ACCOUNT || "7d498c9f067a2db08dfbae9950bee688";
+  const dbId = process.env.V7_D1_ID || "ca1f7479-5c41-4a1e-8ae4-836617d277d5";
+  if (cfTok) {
+    for (const who of [A[0], B[0]]) {
+      const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${acct}/d1/database/${dbId}/query`, {
+        method: "POST",
+        headers: { Authorization: "Bearer " + cfTok, "Content-Type": "application/json" },
+        body: JSON.stringify({ sql: `UPDATE accounts SET points = points + ${needPer} WHERE username = '${who.replace(/'/g, "''")}'` }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j.success) console.log("  (预充 " + who + " 失败: " + JSON.stringify(j.errors || "").slice(0, 100) + ")");
+    }
+    console.log("  (已为测试账号各补充 " + needPer + " Credits)");
+  } else {
+    console.log("  (未提供 V7_CF_TOKEN，跳过预充额；若因 Credits 不足失败请手动补充)");
+  }
   const aA = api(A[1]), aB = api(B[1]);
   const sinkA = [], sinkB = [];
   const wsA = wsFor(A[1], "A", sinkA);
@@ -60,15 +88,20 @@ const ok = (c, n, extra) => { if (c) { pass++; console.log("  ✓ " + n); } else
   await sleep(1200);
 
   console.log("===== 1. 购买房间号 =====");
+  // 费率从服务端读取（唯一真相源），改价后本脚本无需修改
+  const feesResp = await aA("/api/game/fees");
+  const FEES = feesResp.data && feesResp.data.fees ? feesResp.data.fees : {};
+  ok(!!FEES.chess && !!FEES.match3 && !!FEES.xiangqi, "费率接口返回三类游戏费率", FEES);
+
   const buy = await aA("/api/shop/buy", { type: "chess" });
   ok(buy.ok && buy.data.roomId, "房主购买国际象棋房间成功", buy.data);
   const roomId = buy.data.roomId;
-  ok(buy.data.fee === 5, "扣费 5 Credits", buy.data.fee);
+  ok(buy.data.fee === FEES.chess, "扣费与国际象棋费率一致 (" + FEES.chess + ")", buy.data.fee);
 
   const buy3 = await aB("/api/shop/buy", { type: "match3" });
   ok(buy3.ok && buy3.data.roomId, "购买消消乐（单人局）成功", buy3.data);
   const m3Room = buy3.data.roomId;
-  ok(buy3.data.fee === 10, "消消乐扣费 10 Credits", buy3.data.fee);
+  ok(buy3.data.fee === FEES.match3, "消消乐扣费与费率一致 (" + FEES.match3 + ")", buy3.data.fee);
 
   const bad = await aA("/api/shop/buy", { type: "poker" });
   ok(!bad.ok && bad.status === 400, "未知游戏类型被拒绝", bad.data);
