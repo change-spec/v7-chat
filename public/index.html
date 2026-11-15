@@ -3339,7 +3339,15 @@
           appendSys('上传中断：连接已断开，文件未发送');
           return;
         }
-        ws.send(reader.result);
+        var arr = new Uint8Array(reader.result);
+        // 分片前缀：[4字节 fileId 长度(uint32 BE)][fileId UTF-8][分片数据]
+        // 服务端据此还原上传归属，避免 DO 实例回收导致内存映射丢失、分片无归属而丢弃
+        var idb = new TextEncoder().encode(fileId);
+        var out = new Uint8Array(4 + idb.length + arr.length);
+        out[0] = (idb.length >>> 24) & 255; out[1] = (idb.length >>> 16) & 255; out[2] = (idb.length >>> 8) & 255; out[3] = idb.length & 255;
+        out.set(idb, 4);
+        out.set(arr, 4 + idb.length);
+        ws.send(out.buffer);
         offset += CHUNK;
         fileProgress(fileId, offset / f.size * 100);
         nextChunk();

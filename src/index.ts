@@ -259,6 +259,10 @@ async function purgeOldMessages(env: Env, force = false): Promise<void> {
     await env.DB.prepare(
       "DELETE FROM chat_file_chunks WHERE file_id NOT IN (SELECT id FROM chat_files)"
     ).run();
+    // 上传会话表：已完成（已生成 chat_files）或超过 1 小时的残留会话一并清理
+    await env.DB.prepare(
+      "DELETE FROM chat_uploads WHERE file_id IN (SELECT id FROM chat_files) OR created_at < ?"
+    ).bind(new Date(now - 3600 * 1000).toISOString()).run().catch(() => {});
     // 系统日志最多保留 35 天
     await env.DB.prepare("DELETE FROM admin_logs WHERE created_at < ?")
       .bind(new Date(now - LOG_RETENTION_MS).toISOString()).run();
@@ -957,6 +961,19 @@ async function ensureSchema(env: Env): Promise<void> {
         seq INTEGER NOT NULL,
         data TEXT NOT NULL,
         PRIMARY KEY (file_id, seq)
+      )`),
+      // 上传会话元数据：file-start 时写入，作为二进制分片不携带元信息、仅靠内存 fileBuf 归属的兜底。
+      // DO 实例在分片之间被回收时内存 fileBuf 会丢失，file-end/分片处理按 file_id 从此表还原归属。
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS chat_uploads (
+        file_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        mime TEXT,
+        room TEXT NOT NULL,
+        sender TEXT NOT NULL,
+        role TEXT,
+        seq INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
       )`)
     ]);
     // 旧库补列：单独执行，避免 ALTER 失败导致整个 batch 回滚（导致表建不出来）
@@ -2088,6 +2105,27 @@ async function ensureShardSchema(env: Env, idx: number): Promise<void> {
     "CREATE TABLE IF NOT EXISTS cloud_file_chunks (file_id TEXT NOT NULL, seq INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (file_id, seq))"
   ).run();
   ensuredShards.add(idx);
+}
+
+// chat_uploads 表结构自愈：DO 的 WebSocket 路径不走 ensureSchema（那里只覆盖 Pages 的 API 端点），
+// 而 chat_uploads 仅在 DO 路径使用 → 必须在 DO 侧自行建表，否则 D1 兜底会因缺表而静默失效。
+let ensuredUploadsTable = false;
+async function ensureChatUploadsTable(env: Env): Promise<void> {
+  if (ensuredUploadsTable) return;
+  try {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS chat_uploads (
+      file_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      mime TEXT,
+      room TEXT NOT NULL,
+      sender TEXT NOT NULL,
+      role TEXT,
+      seq INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    )`).run();
+    ensuredUploadsTable = true; // 仅成功后置位，失败则下次重试
+  } catch {}
 }
 
 // 写入云文件二进制：优先 Supabase，失败或强制(forceD1)时降级为 D1 分片（散到 9 个分片库）
@@ -3386,6 +3424,8 @@ export class Room {
   private byUser = new Map<string, Set<WebSocket>>();
   // 上传中的文件缓冲：用于把聊天文件落地进 chat_files（保留 7 天）
   private fileBuf = new Map<WebSocket, FileAcq>();
+  // 已提示过「页面版本过旧」的连接（每个连接只提示一次，避免刷屏）
+  private oldProtoWarned = new Set<WebSocket>();
 
 
   constructor(state: DurableObjectState, env: Env) {
@@ -3438,16 +3478,39 @@ export class Room {
     if (!user) return;
     if (typeof message !== "string") {
       if (message instanceof ArrayBuffer) {
-        const acq = this.fileBuf.get(ws);
-        // 每收到一块二进制立即落库（按 file_id+seq），保证帧乱序/DO 重置也不丢块
+        // 分片前缀：[4字节 file_id 长度(uint32 BE)][file_id UTF-8][分片数据]
+        // 二进制分片本身不携带任何元信息，仅靠内存 fileBuf 归属。为能在 DO 实例被回收后
+        // 仍按 file_id 还原归属，前缀里带上 file_id，file-start 时已把会话持久化进 chat_uploads。
+        const buf = new Uint8Array(message);
+        if (buf.length < 4) return;
+        const idLen = (buf[0] << 24) | (buf[1] << 16) | (buf[2] << 8) | buf[3];
+        if (idLen <= 0 || buf.length < 4 + idLen) {
+          // 无法解析出 file_id 前缀 → 这是旧版本客户端的裸分片（页面缓存未刷新）
+          if (!this.oldProtoWarned.has(ws)) {
+            this.oldProtoWarned.add(ws);
+            this.sendTo(ws, { type: "sys", text: "页面版本过旧，无法发送文件，请刷新页面后重试（文件未发送、未扣费）" });
+          }
+          return;
+        }
+        const fileId = new TextDecoder().decode(buf.subarray(4, 4 + idLen));
+        const chunkData = buf.subarray(4 + idLen);
+        let acq = this.fileBuf.get(ws);
+        if (!acq || acq.id !== fileId) {
+          // fileBuf 没命中（并发竞态或实例回收）：用 file_id 从 D1 兜底还原
+          acq = await this.loadUpload(fileId);
+          if (acq) this.fileBuf.set(ws, acq);
+        }
         if (acq) {
           acq.seq++;
           try {
             await this.env.DB.prepare("INSERT OR REPLACE INTO chat_file_chunks (file_id, seq, data) VALUES (?, ?, ?)")
-              .bind(acq.id, acq.seq, bytesToBase64(new Uint8Array(message))).run();
+              .bind(acq.id, acq.seq, bytesToBase64(chunkData)).run();
+            // 同步 seq 到 chat_uploads，保证实例回收后兜底还原时序号连续（避免分片被 OR REPLACE 覆盖）
+            await ensureChatUploadsTable(this.env);
+            await this.env.DB.prepare("UPDATE chat_uploads SET seq = ? WHERE file_id = ?").bind(acq.seq, acq.id).run().catch(() => {});
           } catch {}
         }
-        this.broadcastBinaryToRoom(message, this.roomOf.get(ws) || "");
+        this.broadcastBinaryToRoom(chunkData, this.roomOf.get(ws) || "");
       }
       return;
     }
@@ -3481,6 +3544,22 @@ export class Room {
       // 文件传输：非成员禁发；公告群仅 RA 可发；观测者仅可在与 RA 的私聊里发；仅广播给同房
       if (typeof data.type === "string" && data.type.indexOf("file-") === 0) {
         const room = this.roomOf.get(ws) || "";
+        const size = Math.max(0, Number(data.size) || 0);
+        // 关键修复：必须在 await 之前先把上传会话写进内存 fileBuf。
+        // 否则 file-start 与紧随其后的二进制分片会被 DO 并发处理，分片可能先于 fileBuf.set 执行、
+        // 找不到归属而被丢弃，导致“分片缺失、文件永远发不出去”（实测 0ms 间隔必现、1500ms 正常）。
+        if (data.type === "file-start") {
+          this.fileBuf.set(ws, {
+            id: String(data.id),
+            name: String(data.name || "file"),
+            size: size,
+            mime: String(data.mime || "application/octet-stream"),
+            seq: 0,
+            room: room,
+            sender: user.username,
+            role: user.role
+          });
+        }
         if (!room || !(await isMember(this.env.DB, room, user.username))) {
           this.sendTo(ws, { type: "sys", text: "请先进入一个房间再发送文件" });
           return;
@@ -3493,28 +3572,26 @@ export class Room {
           this.sendTo(ws, { type: "sys", text: "观测者只能在「与 Root-Admin 的私聊」里发文件" });
           return;
         }
-        const size = Math.max(0, Number(data.size) || 0);
         // 文件上传计费：按该群自定义倍率（每 MB 单价）；geek 公告群倍率 0 → 免费
         if (data.type === "file-abort") {
           const ab = this.fileBuf.get(ws);
-          if (ab && ab.id === String(data.id)) {
-            this.fileBuf.delete(ws);
-            await this.env.DB.prepare("DELETE FROM chat_file_chunks WHERE file_id = ?").bind(ab.id).run().catch(() => {});
-          }
+          const aid = ab ? ab.id : String(data.id);
+          if (ab) this.fileBuf.delete(ws);
+          await this.env.DB.prepare("DELETE FROM chat_file_chunks WHERE file_id = ?").bind(aid).run().catch(() => {});
+          await this.env.DB.prepare("DELETE FROM chat_uploads WHERE file_id = ?").bind(aid).run().catch(() => {});
           return;
         }
         // 计费延后到 file-end 持久化成功之后：避免「已扣费却未落库」导致刷新后文件消失、积分白扣
         if (data.type === "file-start") {
-          this.fileBuf.set(ws, {
-            id: String(data.id),
-            name: String(data.name || "file"),
-            size: size,
-            mime: String(data.mime || "application/octet-stream"),
-            seq: 0,
-            room: room,
-            sender: user.username,
-            role: user.role
-          });
+          // 持久化上传会话到 D1（chat_uploads），作为 DO 实例在分片之间被回收时的兜底：
+          // 二进制分片不携带额外元信息，仅靠内存 fileBuf 归属；实例一旦回收内存即丢，故落库一份。
+          const acq0 = this.fileBuf.get(ws);
+          if (acq0) {
+            // DO 路径不走 ensureSchema，这里按需自愈建表
+            await ensureChatUploadsTable(this.env);
+            await this.env.DB.prepare("INSERT OR REPLACE INTO chat_uploads (file_id, name, size, mime, room, sender, role, seq, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)")
+              .bind(acq0.id, acq0.name, acq0.size, acq0.mime, acq0.room, acq0.sender, acq0.role, new Date().toISOString()).run().catch(() => {});
+          }
         }
         // 转发给同房其他人（不含发送者）；发送者以 file-done 回执为准
         this.broadcastToRoom({
@@ -3528,9 +3605,12 @@ export class Room {
           room: room
         }, room, ws);
         if (data.type === "file-end") {
-          const acq = this.fileBuf.get(ws);
+          let acq = this.fileBuf.get(ws);
+          if (!acq) acq = await this.loadUpload(String(data.id)); // DO 回收兜底：fileBuf 丢失时按 file_id 还原
           this.fileBuf.delete(ws);
+          if (acq) await this.env.DB.prepare("DELETE FROM chat_uploads WHERE file_id = ?").bind(acq.id).run().catch(() => {});
           if (!acq) {
+            await this.env.DB.prepare("DELETE FROM chat_file_chunks WHERE file_id = ?").bind(String(data.id)).run().catch(() => {});
             this.sendTo(ws, { type: "file-done", id: String(data.id), ok: false, error: "上传会话已失效，请重试" });
             return;
           }
@@ -3839,7 +3919,26 @@ export class Room {
     }
   }
 
-  private broadcastBinaryToRoom(buf: ArrayBuffer, room: string): void {
+  private async loadUpload(fileId: string): Promise<FileAcq | null> {
+    try {
+      await ensureChatUploadsTable(this.env);
+      const r = await this.env.DB.prepare(
+        "SELECT file_id AS id, name, size, mime, room, sender, role, seq FROM chat_uploads WHERE file_id = ?"
+      ).bind(fileId).first<{ id: string; name: string; size: number; mime: string; room: string; sender: string; role: string; seq: number }>();
+      if (!r) return null;
+      // seq 以 chat_file_chunks 里实际已落库的最大序号为准，而非 chat_uploads.seq：
+      // 若 DO 在「分片 INSERT」与「seq UPDATE」之间被回收，后者会落后 1，
+      // 还原后下一片会复用同一 seq，被 INSERT OR REPLACE 覆盖 → 丢数据。
+      const mx = await this.env.DB.prepare("SELECT COALESCE(MAX(seq), 0) AS m FROM chat_file_chunks WHERE file_id = ?")
+        .bind(fileId).first<{ m: number }>();
+      const seq = mx && typeof mx.m === "number" ? mx.m : (r.seq || 0);
+      return { id: r.id, name: r.name, size: r.size, mime: r.mime || "application/octet-stream", seq: seq, room: r.room, sender: r.sender, role: r.role || "" };
+    } catch {
+      return null;
+    }
+  }
+
+  private broadcastBinaryToRoom(buf: ArrayBuffer | Uint8Array, room: string): void {
     if (!room) return;
     for (const [ws, r] of this.roomOf) {
       if (r !== room) continue;
