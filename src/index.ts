@@ -1400,6 +1400,39 @@ async function ensureGameSchema(env: Env): Promise<void> {
   } catch {}
 }
 
+// ===== 飞行棋房间系统（4 人，独立于 2 人对弈系统）=====
+// 房间参数：真人 1-4 / AI 0-3（AI 只占位，真人必须凑齐才能开局）；速率固定 1.00。
+let flightSchemaReady = false;
+async function ensureFlightSchema(env: Env): Promise<void> {
+  if (flightSchemaReady) return;
+  try {
+    await env.DB.batch([
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS flight_rooms (
+        id TEXT PRIMARY KEY,
+        creator TEXT NOT NULL,
+        human INTEGER NOT NULL,
+        ai INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'waiting',
+        state TEXT,
+        winner TEXT,
+        created_at TEXT NOT NULL
+      )`),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS flight_seats (
+        room_id TEXT NOT NULL,
+        username TEXT NOT NULL,
+        seat INTEGER NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'human',
+        joined_at TEXT NOT NULL,
+        PRIMARY KEY (room_id, username)
+      )`)
+    ]);
+    flightSchemaReady = true;
+  } catch {}
+}
+
+const FLIGHT_RATE = 1.0; // 速率固定 1.00，不可调
+const FLIGHT_FEE = 40;   // 飞行棋每局房号费用（Credits），速率 1.00 固定
+
 
 // ---------------------------------------------------------------------------
 // 座位模型（game_seats 表）
@@ -1448,7 +1481,7 @@ function freeSeat(players: Array<{ username: string; seat: number }>): number {
 // 游戏费率（单位 Credits）：消消乐单人局 50；国际象棋 / 中国象棋 每局 28。
 // ⚠️ 这是**唯一真相源**：前端展示价格通过 GET /api/game/fees 拉取同一份数据，
 //    不要再在前端硬编码价格文案（曾因硬编码导致「文案 5 实际扣 5」两处漂移）。
-const GAME_FEES: Record<string, number> = { match3: 50, chess: 28, xiangqi: 28, gomoku: 42, go: 42 };
+const GAME_FEES: Record<string, number> = { match3: 50, chess: 28, xiangqi: 28, gomoku: 42, go: 42, flight: 40 };
 const GAME_FEE_DEFAULT = 28;
 
 // 按游戏类型取费率（消消乐 / 国际象棋 / 中国象棋）
@@ -3573,6 +3606,264 @@ async function handleGameRestart(_request: Request, _env: Env): Promise<Response
   return json({ error: "棋类结束后不能再开下一局，请到 SHOP 重新购买房间号" }, 403);
 }
 
+// ---------------------------------------------------------------------------
+// 飞行棋 helpers
+// ---------------------------------------------------------------------------
+type FlightRoom = { id: string; creator: string; human: number; ai: number; status: string; state: string | null; winner: string | null; created_at: string };
+type FlightSeat = { room_id: string; username: string; seat: number; kind: string; joined_at: string };
+
+async function flightRoom(env: Env, id: string): Promise<FlightRoom | null> {
+  return env.DB.prepare("SELECT * FROM flight_rooms WHERE id = ?").bind(id).first<FlightRoom>();
+}
+async function flightSeats(env: Env, id: string): Promise<FlightSeat[]> {
+  const r = await env.DB.prepare("SELECT * FROM flight_seats WHERE room_id = ? ORDER BY seat ASC").bind(id).all<FlightSeat>();
+  return (r.results || []) as FlightSeat[];
+}
+// 座位 → 显示名（真人=用户名；AI 用「AI·颜色」占位，颜色按 seat 0红1黄2绿3蓝）
+const FLIGHT_COLORS = ["红", "黄", "绿", "蓝"];
+function flightSeatName(s: FlightSeat): string {
+  return s.kind === "ai" ? ("AI·" + FLIGHT_COLORS[s.seat]) : s.username;
+}
+// 房间里的玩家（真人 + AI），按 seat 排
+async function flightPlayers(env: Env, id: string): Promise<Array<{ seat: number; kind: string; name: string; username: string }>> {
+  const seats = await flightSeats(env, id);
+  return seats.map((s) => ({ seat: s.seat, kind: s.kind, name: flightSeatName(s), username: s.username }));
+}
+async function flightNotify(env: Env, id: string, payload: unknown): Promise<void> {
+  // 按座位表里的真人用户名定向推送（玩家未必在同一聊天室，不能用房间广播）
+  const seats = await flightSeats(env, id);
+  const humans = seats.filter((s) => s.kind === "human").map((s) => s.username);
+  if (!humans.length) return;
+  await notifyUsers(env, humans, Object.assign({ game: "flight", roomId: id }, payload));
+}
+
+// 建房：房主设 真人1-4 / AI 0-3，真人+AI<=4；扣费后原子建房间+座位
+async function handleFlightCreate(request: Request, env: Env): Promise<Response> {
+  await ensureFlightSchema(env);
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  let body: { human?: number; ai?: number };
+  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  const human = Math.round(Number(body.human));
+  const ai = Math.round(Number(body.ai || 0));
+  if (!(human >= 1 && human <= 4)) return json({ error: "真人人数必须是 1-4" }, 400);
+  if (!(ai >= 0 && ai <= 3)) return json({ error: "AI 个数必须是 0-3" }, 400);
+  if (human + ai > 4) return json({ error: "真人与 AI 合计不能超过 4 人" }, 400);
+
+  const acc = await env.DB.prepare("SELECT points FROM accounts WHERE username = ?").bind(user.username).first<{ points: number }>();
+  if (!acc || acc.points < FLIGHT_FEE) return json({ error: "Credits 不足，飞行棋开局需要 " + FLIGHT_FEE + " Credits" }, 402);
+
+  let id = "";
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const cand = genRoomId();
+    const exists = await env.DB.prepare("SELECT id FROM flight_rooms WHERE id = ?").bind(cand).first();
+    if (!exists) { id = cand; break; }
+  }
+  if (!id) return json({ error: "房间号生成失败，请重试" }, 500);
+  const now = new Date().toISOString();
+  try {
+    const stmts: any[] = [
+      env.DB.prepare("UPDATE accounts SET points = points - ? WHERE username = ? AND points >= ?").bind(FLIGHT_FEE, user.username, FLIGHT_FEE),
+      env.DB.prepare("INSERT INTO credits_logs (username, delta, reason, created_at) VALUES (?, ?, ?, ?)").bind(user.username, -FLIGHT_FEE, "飞行棋开局(速率1.00)", now),
+      env.DB.prepare("INSERT INTO flight_rooms (id, creator, human, ai, status, state, winner, created_at) VALUES (?, ?, ?, ?, 'waiting', NULL, NULL, ?)")
+        .bind(id, user.username, human, ai, now),
+      env.DB.prepare("INSERT INTO flight_seats (room_id, username, seat, kind, joined_at) VALUES (?, ?, ?, 'human', ?)")
+        .bind(id, user.username, 0, now)
+    ];
+    // AI 席位预先占位（seat = human .. human+ai-1），保证 brew 后真人填 human-1 个席位
+    for (let k = 0; k < ai; k++) {
+      const seat = human + k;
+      const aiName = "AI" + id + seat;
+      stmts.push(env.DB.prepare("INSERT INTO flight_seats (room_id, username, seat, kind, joined_at) VALUES (?, ?, ?, 'ai', ?)")
+        .bind(id, aiName, seat, now));
+    }
+    await env.DB.batch(stmts);
+  } catch {
+    return json({ error: "创建房间失败，未扣费，请重试" }, 500);
+  }
+  const players = await flightPlayers(env, id);
+  return json({ ok: true, roomId: id, human, ai, rate: FLIGHT_RATE, fee: FLIGHT_FEE, creator: user.username, seat: 0, players, ready: human === 1 && ai === 0 });
+}
+
+// 加入房间：真人占剩余 human 席位之一；扣费原子占座；真人凑齐后 ready=true
+async function handleFlightJoin(request: Request, env: Env): Promise<Response> {
+  await ensureFlightSchema(env);
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  let body: { roomId?: string };
+  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  const id = (body.roomId || "").trim().toUpperCase();
+  const room = await flightRoom(env, id);
+  if (!room) return json({ error: "房间不存在，检查房间号" }, 404);
+  if (room.status !== "waiting") return json({ error: "该房间已开局或已结束" }, 409);
+  const seats = await flightSeats(env, id);
+  // 房主本人进自己的房间：免费，直接回
+  if (room.creator === user.username) {
+    return json({ ok: true, roomId: id, self: true, seat: 0, creator: room.creator, human: room.human, ai: room.ai, rate: FLIGHT_RATE, players: await flightPlayers(env, id), ready: false });
+  }
+  if (seats.some((s) => s.username === user.username && s.kind === "human")) {
+    return json({ ok: true, roomId: id, already: true, creator: room.creator, human: room.human, ai: room.ai, rate: FLIGHT_RATE, players: await flightPlayers(env, id), ready: false });
+  }
+  const humanSeats = seats.filter((s) => s.kind === "human").length;
+  if (humanSeats >= room.human) return json({ error: "真人席位已满" }, 409);
+  // 找一个空 human 席位：真人席位是 0..human-1；已占 humanSeats 个
+  let seat = -1;
+  for (let s = 0; s < room.human; s++) if (!seats.some((x) => x.seat === s)) { seat = s; break; }
+  if (seat < 0) return json({ error: "真人席位已满" }, 409);
+  const acc = await env.DB.prepare("SELECT points FROM accounts WHERE username = ?").bind(user.username).first<{ points: number }>();
+  if (!acc || acc.points < FLIGHT_FEE) return json({ error: "Credits 不足，加入需要 " + FLIGHT_FEE + " Credits" }, 402);
+  const now = new Date().toISOString();
+  try {
+    await env.DB.batch([
+      env.DB.prepare("UPDATE accounts SET points = points - ? WHERE username = ? AND points >= ?").bind(FLIGHT_FEE, user.username, FLIGHT_FEE),
+      env.DB.prepare("INSERT INTO credits_logs (username, delta, reason, created_at) VALUES (?, ?, ?, ?)").bind(user.username, -FLIGHT_FEE, "飞行棋加入(速率1.00)", now),
+      env.DB.prepare("INSERT INTO flight_seats (room_id, username, seat, kind, joined_at) VALUES (?, ?, ?, 'human', ?)").bind(id, user.username, seat, now)
+    ]);
+  } catch { return json({ error: "加入失败，未扣费，请重试" }, 500); }
+  const players = await flightPlayers(env, id);
+  const ready = players.filter((p) => p.kind === "human").length >= room.human;
+  await flightNotify(env, id, { type: "flight-join", seat, name: user.username, players, ready });
+  return json({ ok: true, roomId: id, seat, creator: room.creator, human: room.human, ai: room.ai, rate: FLIGHT_RATE, players, ready });
+}
+
+// 查询房间状态（前端轮询兜底）
+async function handleFlightState(request: Request, env: Env): Promise<Response> {
+  await ensureFlightSchema(env);
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  const id = (new URL(request.url).searchParams.get("roomId") || "").trim().toUpperCase();
+  const room = await flightRoom(env, id);
+  if (!room) return json({ error: "房间不存在" }, 404);
+  const players = await flightPlayers(env, id);
+  const ready = players.filter((p) => p.kind === "human").length >= room.human;
+  const iAm = players.find((p) => p.username === user.username);
+  return json({ ok: true, room: { id: room.id, creator: room.creator, human: room.human, ai: room.ai, status: room.status, state: room.state, winner: room.winner, rate: FLIGHT_RATE },
+    players, ready, seat: iAm ? iAm.seat : -1, iAmCreator: room.creator === user.username });
+}
+
+// 开局：仅房主；真人必须凑齐；服务端生成初始 state，写库并广播
+async function handleFlightStart(request: Request, env: Env): Promise<Response> {
+  await ensureFlightSchema(env);
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  let body: { roomId?: string };
+  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  const id = (body.roomId || "").trim().toUpperCase();
+  const room = await flightRoom(env, id);
+  if (!room) return json({ error: "房间不存在" }, 404);
+  if (room.creator !== user.username) return json({ error: "只有房主可以开局" }, 403);
+  if (room.status !== "waiting") return json({ error: "房间已开局" }, 409);
+  const players = await flightPlayers(env, id);
+  const humanCount = players.filter((p) => p.kind === "human").length;
+  if (humanCount < room.human) return json({ error: "真人未凑齐（" + humanCount + "/" + room.human + "），不能开局" }, 409);
+  // 初始 state：n|turn|dice|six|winner|finished|pieces
+  const n = room.human + room.ai;
+  const rows: string[] = [];
+  for (let p = 0; p < 4; p++) rows.push(p < n ? "-1,-1,-1,-1" : "x");
+  const state = [n, 0, 0, 0, "x", "", rows.join(";")].join("|");
+  await env.DB.prepare("UPDATE flight_rooms SET status = 'playing', state = ? WHERE id = ?").bind(state, id).run();
+  await flightNotify(env, id, { type: "flight-start", state });
+  return json({ ok: true, state, players });
+}
+
+// 掷骰：仅当前行动方（真人）；服务端随机 1-6，写入 state 的 dice 字段并广播
+async function handleFlightRoll(request: Request, env: Env): Promise<Response> {
+  await ensureFlightSchema(env);
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  let body: { roomId?: string };
+  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  const id = (body.roomId || "").trim().toUpperCase();
+  const room = await flightRoom(env, id);
+  if (!room) return json({ error: "房间不存在" }, 404);
+  if (room.status !== "playing" || !room.state) return json({ error: "房间未开局" }, 409);
+  const players = await flightPlayers(env, id);
+  const f = room.state.split("|");
+  const turnSeat = Number(f[1]);
+  const actor = players.find((p) => p.seat === turnSeat);
+  if (!actor || actor.kind !== "human" || actor.username !== user.username) return json({ error: "还没轮到你掷骰" }, 403);
+  const dice = 1 + crypto.getRandomValues(new Uint8Array(1))[0] % 6;
+  f[2] = String(dice);
+  const state = f.join("|");
+  await env.DB.prepare("UPDATE flight_rooms SET state = ? WHERE id = ?").bind(state, id).run();
+  await flightNotify(env, id, { type: "flight-roll", seat: turnSeat, by: user.username, dice });
+  return json({ ok: true, dice, state });
+}
+
+// 走子：前端按引擎算好新 state 提交；服务端校验行动方后写库；含 winner 则结算
+async function handleFlightMove(request: Request, env: Env): Promise<Response> {
+  await ensureFlightSchema(env);
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  let body: { roomId?: string; state?: string };
+  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  const id = (body.roomId || "").trim().toUpperCase();
+  const state = (body.state || "").trim();
+  if (!state || state.length > 4000) return json({ error: "局面数据无效" }, 400);
+  const room = await flightRoom(env, id);
+  if (!room) return json({ error: "房间不存在" }, 404);
+  if (room.status !== "playing") return json({ error: "房间未开局" }, 409);
+  const players = await flightPlayers(env, id);
+  const oldF = (room.state || "").split("|");
+  const turnSeat = Number(oldF[1]);
+  const actor = players.find((p) => p.seat === turnSeat);
+  // 真人走子必须校验行动方；AI 走子由当前真人的客户端代提交，放行但要带 aiAct 标记
+  const isAiTurn = actor && actor.kind === "ai";
+  if (!isAiTurn && (!actor || actor.username !== user.username)) return json({ error: "还没轮到你走子" }, 403);
+  const f = state.split("|");
+  const winnerSeat = f[4] === "x" ? -1 : Number(f[4]);
+  const winner = winnerSeat >= 0 ? (players.find((p) => p.seat === winnerSeat)?.name || "") : null;
+  await env.DB.prepare("UPDATE flight_rooms SET state = ?, winner = ? WHERE id = ?").bind(state, winner, id).run();
+  if (winner) await env.DB.prepare("UPDATE flight_rooms SET status = 'ended' WHERE id = ?").bind(id).run();
+  await flightNotify(env, id, { type: "flight-move", state, by: user.username, winner });
+  return json({ ok: true, state, winner });
+}
+
+// 离开房间：房主离开=删房；真人离开释放座位（开局后不释放，提示）
+async function handleFlightLeave(request: Request, env: Env): Promise<Response> {
+  await ensureFlightSchema(env);
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  let body: { roomId?: string };
+  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  const id = (body.roomId || "").trim().toUpperCase();
+  const room = await flightRoom(env, id);
+  if (!room) return json({ error: "房间不存在" }, 404);
+  if (room.creator === user.username) {
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM flight_seats WHERE room_id = ?").bind(id),
+      env.DB.prepare("DELETE FROM flight_rooms WHERE id = ?").bind(id)
+    ]);
+    await flightNotify(env, id, { type: "flight-deleted", by: user.username });
+    return json({ ok: true, deleted: true });
+  }
+  if (room.status !== "waiting") return json({ error: "对局进行中，不能离开（请等本局结束）" }, 409);
+  await env.DB.prepare("DELETE FROM flight_seats WHERE room_id = ? AND username = ?").bind(id, user.username).run();
+  const players = await flightPlayers(env, id);
+  await flightNotify(env, id, { type: "flight-leave", by: user.username, players });
+  return json({ ok: true, deleted: false, players });
+}
+
+// 删除房间（仅房主）
+async function handleFlightDelete(request: Request, env: Env): Promise<Response> {
+  await ensureFlightSchema(env);
+  const user = await authUser(request, env);
+  if (!user) return json({ error: "未登录" }, 401);
+  let body: { roomId?: string };
+  try { body = await request.json(); } catch { return json({ error: "请求格式错误" }, 400); }
+  const id = (body.roomId || "").trim().toUpperCase();
+  const room = await flightRoom(env, id);
+  if (!room) return json({ error: "房间不存在" }, 404);
+  if (room.creator !== user.username) return json({ error: "只有房主可以删除房间" }, 403);
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM flight_seats WHERE room_id = ?").bind(id),
+    env.DB.prepare("DELETE FROM flight_rooms WHERE id = ?").bind(id)
+  ]);
+  await flightNotify(env, id, { type: "flight-deleted", by: user.username });
+  return json({ ok: true });
+}
+
+// 费率查询里带上 flight
 // 删除房间：房主可删除自己的房间（任意状态，含已结束）
 // 作用：房间打完后能把房间号释放掉，避免「这局早就结束了却一直显示已满、还删不掉」。
 async function handleGameDelete(request: Request, env: Env): Promise<Response> {
@@ -3736,6 +4027,15 @@ export default {
     if (url.pathname === "/api/game/delete" && request.method === "POST") return handleGameDelete(request, env);
     if (url.pathname === "/api/game/leave" && request.method === "POST") return handleGameLeave(request, env);
     if (url.pathname === "/api/game/restart" && request.method === "POST") return handleGameRestart(request, env);
+    // 飞行棋（4 人，独立房间系统，速率固定 1.00）
+    if (url.pathname === "/api/flight/create" && request.method === "POST") return handleFlightCreate(request, env);
+    if (url.pathname === "/api/flight/join" && request.method === "POST") return handleFlightJoin(request, env);
+    if (url.pathname === "/api/flight/state" && request.method === "GET") return handleFlightState(request, env);
+    if (url.pathname === "/api/flight/start" && request.method === "POST") return handleFlightStart(request, env);
+    if (url.pathname === "/api/flight/roll" && request.method === "POST") return handleFlightRoll(request, env);
+    if (url.pathname === "/api/flight/move" && request.method === "POST") return handleFlightMove(request, env);
+    if (url.pathname === "/api/flight/leave" && request.method === "POST") return handleFlightLeave(request, env);
+    if (url.pathname === "/api/flight/delete" && request.method === "POST") return handleFlightDelete(request, env);
     if (url.pathname === "/api/rooms" && request.method === "GET") return handleRoomsList(request, env);
     if (url.pathname === "/api/rooms/create" && request.method === "POST") return handleRoomCreate(request, env);
     if (url.pathname === "/api/rooms/history" && request.method === "GET") return handleRoomHistory(request, env);

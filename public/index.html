@@ -703,6 +703,42 @@
   body, .main > .panel, .app, .auth-screen {
     scrollbar-width: thin; scrollbar-color: rgba(0,240,255,.45) rgba(0,0,0,.25);
   }
+  /* ===== 飞行棋 ===== */
+  .fl-players { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin:10px 0; }
+  .fl-pcard { display:flex; align-items:center; gap:7px; padding:6px 10px; border-radius:8px;
+    border:1px solid #2a2a44; background:#101020; font-size:12px; min-width:118px; }
+  .fl-pcard.active { box-shadow:0 0 0 2px currentColor, 0 0 14px currentColor; }
+  .fl-pdot { width:14px; height:14px; border-radius:50%; box-shadow:0 0 10px currentColor; background:currentColor; flex-shrink:0; }
+  .fl-pname { color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:96px; }
+  .fl-pseat { color:var(--dim); font-size:10px; }
+  .fl-stage { display:flex; justify-content:center; padding:8px 0; }
+  .fl-board { position:relative; width:min(92vw,560px); aspect-ratio:1/1; background:#0c0c18;
+    border:2px solid #ff2e97; border-radius:14px;
+    box-shadow:0 0 24px rgba(255,46,151,.35), inset 0 0 40px rgba(0,0,0,.6); overflow:hidden; }
+  .fl-grid { position:absolute; inset:0; display:grid; grid-template-columns:repeat(15,1fr); grid-template-rows:repeat(15,1fr); }
+  .fl-cell { border:.5px solid rgba(255,255,255,.04); }
+  .fl-cell.track { background:#16162a; border:1px solid #26264a; border-radius:3px; margin:6%; }
+  .fl-cell.start { border-radius:3px; margin:4%; box-shadow:0 0 8px currentColor; }
+  .fl-cell.home { border-radius:3px; margin:10%; opacity:.55; }
+  .fl-cell.base { border-radius:4px; margin:6%; opacity:.35; }
+  .fl-cell.goal { background:radial-gradient(circle,#3a2f00,#0c0c18); border:2px solid var(--amber); border-radius:50%; margin:4%; box-shadow:0 0 16px rgba(255,184,0,.6); }
+  .fl-center { position:absolute; left:47%; top:47%; width:6%; height:6%; display:flex; align-items:center; justify-content:center;
+    font-size:clamp(12px,3vw,20px); color:var(--amber); text-shadow:0 0 10px var(--amber); pointer-events:none; }
+  .fl-piece { position:absolute; width:3.4%; height:3.4%; border-radius:50%; transform:translate(-50%,-50%);
+    border:1.5px solid #fff; box-shadow:0 0 8px currentColor, inset 0 0 4px rgba(255,255,255,.5);
+    display:flex; align-items:center; justify-content:center; font-size:clamp(7px,1.6vw,11px); color:#fff;
+    transition:left .35s ease, top .35s ease; cursor:pointer; z-index:3; }
+  .fl-piece.sel { outline:2px solid #fff; outline-offset:2px; z-index:5; }
+  .fl-piece.tiny { width:2.6%; height:2.6%; font-size:clamp(6px,1.2vw,9px); }
+  .fl-controls { text-align:center; margin-top:10px; }
+  .fl-turn { font-size:13px; color:var(--cyan); min-height:20px; }
+  .fl-dice-wrap { display:flex; justify-content:center; margin:8px 0; }
+  .fl-dice { width:52px; height:52px; border:2px solid var(--cyan); border-radius:10px; background:#0e0e1c;
+    display:flex; align-items:center; justify-content:center; font-size:26px; font-weight:500; color:var(--cyan);
+    box-shadow:0 0 16px rgba(0,240,255,.4); }
+  .fl-dice.rolling { animation:flRoll .5s linear infinite; }
+  @keyframes flRoll { 0%{transform:rotate(0)} 25%{transform:rotate(90deg) scale(1.08)} 50%{transform:rotate(180deg)} 75%{transform:rotate(270deg) scale(1.08)} 100%{transform:rotate(360deg)} }
+  .fl-moves { display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-top:8px; }
 </style>
 </head>
 <body>
@@ -903,8 +939,8 @@
     </div>
 
     <div class="panel hidden" id="gameLobby">
-      <h2>▸ 游戏大厅 · 棋类仅真人对战，不支持 AI</h2>
-      <p class="hint" style="margin:0 0 14px">买一间房：消消乐单人直接开玩；棋类把房间号发给好友，人齐了开局。</p>
+      <h2>▸ 游戏大厅 · 棋类真人对战 / 飞行棋支持 AI</h2>
+      <p class="hint" style="margin:0 0 14px">买一间房：消消乐单人直接开玩；棋类把房间号发给好友，人齐了开局；飞行棋可设真人数 + AI 数，真人凑齐才开局。</p>
       <div class="lobby-grid">
         <div class="lobby-card">
           <div class="t">♟ 国际象棋</div>
@@ -935,6 +971,36 @@
           <div class="d"><span class="fee" data-fee="match3">50</span> Credits / 局 · 单人连线消除</div>
           <button class="btn small magenta wide" data-game-buy="match3">购买并开始</button>
         </div>
+        <div class="lobby-card" style="border-color:#ff2e97">
+          <div class="t">✈ 飞行棋 <span style="font-size:10px;color:#00f0ff">速率 1.00</span></div>
+          <div class="d"><span class="fee" data-fee="flight">40</span> Credits / 局 · 1-4 真人 + 0-3 AI · 4 色</div>
+          <button class="btn small magenta wide" id="btnFlightCreate">▸ 建房（设参数）</button>
+          <button class="btn small wide" id="btnFlightJoin">输入房间号加入</button>
+        </div>
+      </div>
+      <!-- 飞行棋建房参数面板 -->
+      <div class="field hidden" id="flightSetupBox" style="margin-top:14px;border:1px solid #ff2e97;border-radius:10px;padding:12px">
+        <label style="color:#ff2e97">✈ 飞行棋建房 · 设置房间参数</label>
+        <div class="tool-row" style="gap:14px;align-items:center;flex-wrap:wrap;margin:8px 0">
+          <span style="font-size:12px;color:#8a8aa8">真人</span>
+          <button class="btn small" id="flHumanMinus" type="button">−</button>
+          <b id="flHumanVal" style="min-width:20px;text-align:center">4</b>
+          <button class="btn small" id="flHumanPlus" type="button">+</button>
+          <span style="font-size:12px;color:#8a8aa8;margin-left:10px">AI</span>
+          <button class="btn small" id="flAiMinus" type="button">−</button>
+          <b id="flAiVal" style="min-width:20px;text-align:center">0</b>
+          <button class="btn small" id="flAiPlus" type="button">+</button>
+        </div>
+        <p class="hint" style="margin:0 0 8px;font-size:11px">真人 1-4、AI 0-3，合计不超过 4。速率固定 1.00 不可调。真人全部凑齐后由房主开局；每人 <span class="fee" data-fee="flight">40</span> Credits。</p>
+        <div class="tool-row"><button class="btn small magenta" id="btnFlightCreateGo" type="button">▸ 确认建房并扣费</button><button class="btn small" id="btnFlightSetupCancel" type="button">取消</button></div>
+      </div>
+      <!-- 飞行棋加入房间号输入 -->
+      <div class="field hidden" id="flightJoinBox" style="margin-top:14px">
+        <label>飞行棋房间号</label>
+        <div style="display:flex;gap:10px">
+          <input id="flightJoinInput" maxlength="6" style="text-transform:uppercase;letter-spacing:3px;text-align:center">
+          <button class="btn" id="btnFlightJoinGo" style="flex-shrink:0">▸ 加入</button>
+        </div>
       </div>
       <div class="field hidden" id="joinRoomBox" style="margin-top:14px">
         <label>房间号</label>
@@ -957,7 +1023,8 @@
         </div>
         <p class="market-note">
           <b>🍬 消消乐</b>：单人连线消除，买完直接开玩（<span class="fee" data-fee="match3">50</span> Credits）。<br>
-          <b>♟ 国际象棋 / ♞ 中国象棋</b>：真人对战，买完把房间号发给好友，人齐了点「开始棋局」（<span class="fee" data-fee="chess">28</span> Credits / 局）。
+          <b>♟ 国际象棋 / ♞ 中国象棋</b>：真人对战，买完把房间号发给好友，人齐了点「开始棋局」（<span class="fee" data-fee="chess">28</span> Credits / 局）。<br>
+          <b>✈ 飞行棋</b>：1-4 真人 + 0-3 AI，四色对战，真人凑齐开局，速率固定 1.00（<span class="fee" data-fee="flight">40</span> Credits / 局，请到「游戏大厅」建房设参数）。
         </p>
         <div class="tool-row" style="justify-content:center">
           <button class="btn small magenta" data-shop-buy="match3" type="button">🍬 消消乐 · <span class="fee" data-fee="match3">50</span></button>
@@ -965,6 +1032,7 @@
           <button class="btn small magenta" data-shop-buy="xiangqi" type="button">♞ 中国象棋 · <span class="fee" data-fee="xiangqi">28</span></button>
           <button class="btn small magenta" data-shop-buy="gomoku" type="button">⚫ 五子棋 · <span class="fee" data-fee="gomoku">42</span></button>
           <button class="btn small magenta" data-shop-buy="go" type="button">⚪ 围棋 · <span class="fee" data-fee="go">42</span></button>
+          <button class="btn small magenta" id="btnShopFlight" type="button" style="border-color:#ff2e97">✈ 飞行棋 · <span class="fee" data-fee="flight">40</span></button>
         </div>
         <div class="err" id="shopGameErr"></div>
       </div>
@@ -1191,6 +1259,28 @@
         <span class="hint" style="margin:0">你是对手 · 退出即释放座位，可随时换人</span>
       </div>
       <div class="tool-row"><button class="btn small" id="btnRoomLeave">▸ 离开房间页</button></div>
+    </div>
+
+    <!-- 飞行棋房间（4人，独立面板） -->
+    <div class="panel hidden" id="flightRoomPanel">
+      <div class="chat-head">
+        <div class="who">✈ 飞行棋 房间 <b id="flRoomId">-</b> · 速率 <b style="color:#00f0ff">1.00</b> · <span id="flRoomMeta">-</span></div>
+        <span class="conn-badge" id="flStatusBadge"><span class="dot"></span><span id="flStatusText">等待玩家</span></span>
+      </div>
+      <div class="fl-players" id="flPlayers"></div>
+      <div class="fl-stage">
+        <div class="fl-board" id="flBoard"></div>
+      </div>
+      <div class="fl-controls">
+        <div class="fl-turn" id="flTurn">等待开局</div>
+        <div class="fl-dice-wrap"><div class="fl-dice" id="flDice">-</div></div>
+        <div class="tool-row" id="flActions" style="justify-content:center">
+          <button class="btn small magenta" id="btnFlStart" style="display:none">▸ 开局</button>
+          <button class="btn small magenta" id="btnFlRoll" style="display:none">▸ 掷骰</button>
+          <button class="btn small" id="btnFlLeave">▸ 离开房间</button>
+        </div>
+        <div class="err" id="flErr"></div>
+      </div>
     </div>
 
     <div class="panel hidden" id="logPanel">
@@ -2410,6 +2500,141 @@
   root.GameEngine = GE;
 })(typeof window !== 'undefined' ? window : globalThis);
 </script>
+<script id="flightEngine">
+(function (root) {
+  'use strict';
+  // 飞行棋规则引擎 · 纯逻辑零 DOM · 与 test_flight_engine.mjs 共用
+  // 坐标 [col,row]，15x15。主轨道 56 格闭合环（含4拐角格），每步严格相邻。
+  var PATH = [
+    [0,6],[1,6],[2,6],[3,6],[4,6],[5,6],
+    [6,6],[6,5],[6,4],[6,3],[6,2],[6,1],[6,0],
+    [7,0],[8,0],
+    [8,1],[8,2],[8,3],[8,4],[8,5],[8,6],
+    [9,6],[10,6],[11,6],[12,6],[13,6],[14,6],
+    [14,7],[14,8],
+    [13,8],[12,8],[11,8],[10,8],[9,8],[8,8],
+    [8,9],[8,10],[8,11],[8,12],[8,13],[8,14],
+    [7,14],[6,14],
+    [6,13],[6,12],[6,11],[6,10],[6,9],[6,8],
+    [5,8],[4,8],[3,8],[2,8],[1,8],[0,8],
+    [0,7]
+  ];
+  var N_MAIN = PATH.length; // 56
+  var HOME_LEN = 6;
+  var GOAL = N_MAIN + HOME_LEN; // 62
+  // seat 0红 1黄 2绿 3蓝 —— 起飞点均分（间隔14）
+  var COLORS = [
+    { key:'red',    name:'红', hex:'#ff3b5c', start:28,
+      home:[[13,7],[12,7],[11,7],[10,7],[9,7],[8,7]],
+      base:[[10,10],[12,10],[10,12],[12,12]] },
+    { key:'yellow', name:'黄', hex:'#ffcf3d', start:42,
+      home:[[7,13],[7,12],[7,11],[7,10],[7,9],[7,8]],
+      base:[[2,10],[4,10],[2,12],[4,12]] },
+    { key:'green',  name:'绿', hex:'#25e07a', start:14,
+      home:[[7,1],[7,2],[7,3],[7,4],[7,5],[7,6]],
+      base:[[10,2],[12,2],[10,4],[12,4]] },
+    { key:'blue',   name:'蓝', hex:'#33aaff', start:0,
+      home:[[1,7],[2,7],[3,7],[4,7],[5,7],[6,7]],
+      base:[[2,2],[4,2],[2,4],[4,4]] }
+  ];
+  function newState(n) {
+    n = Math.max(1,Math.min(4,n|0));
+    var pieces=[];
+    for (var p=0;p<4;p++) pieces.push(p<n?[-1,-1,-1,-1]:null);
+    return { n:n, turn:0, dice:0, six:false, winner:null, finished:[], pieces:pieces };
+  }
+  function clone(s){ return JSON.parse(JSON.stringify(s)); }
+  function trackIndex(player,progress){ return (COLORS[player].start+progress)%N_MAIN; }
+  function absCell(player,progress){ return PATH[trackIndex(player,progress)]; }
+  function cellOf(player,progress){
+    if (progress<0) return {type:'base',pos:null};
+    if (progress<N_MAIN) return {type:'track',pos:absCell(player,progress)};
+    if (progress<GOAL) return {type:'home',pos:COLORS[player].home[progress-N_MAIN]};
+    return {type:'goal',pos:[7,7]};
+  }
+  function legalMoves(s,dice){
+    var p=s.turn,arr=s.pieces[p],out=[];
+    if (!arr||s.winner!==null) return out;
+    for (var i=0;i<4;i++){
+      var pr=arr[i];
+      if (pr<0){ if(dice===6) out.push({piece:i,to:0,takeoff:true}); continue; }
+      if (pr>=GOAL) continue;
+      var to=pr+dice;
+      if (to>GOAL) continue;
+      out.push({piece:i,to:to});
+    }
+    return out;
+  }
+  function captureAt(s,player,progress,events){
+    var cell=absCell(player,progress);
+    for (var q=0;q<4;q++){
+      if(q===player||!s.pieces[q]) continue;
+      for (var j=0;j<4;j++){
+        var qr=s.pieces[q][j];
+        if(qr>=0&&qr<N_MAIN){
+          var qc=absCell(q,qr);
+          if(qc[0]===cell[0]&&qc[1]===cell[1]){ s.pieces[q][j]=-1; events.push({type:'capture',by:player,victim:q,piece:j}); }
+        }
+      }
+    }
+  }
+  function maybeJump(s,player,pieceIdx,events){
+    var pr=s.pieces[player][pieceIdx];
+    if (pr>0&&pr<N_MAIN&&pr%4===0){
+      var to=Math.min(pr+4,GOAL);
+      s.pieces[player][pieceIdx]=to;
+      events.push({type:'jump',player:player,piece:pieceIdx,from:pr,to:to});
+      if(to<N_MAIN) captureAt(s,player,to,events);
+    }
+  }
+  function nextTurn(s){
+    var guard=0;
+    do { s.turn=(s.turn+1)%s.n; guard++; } while(!s.pieces[s.turn]&&guard<=4);
+  }
+  function apply(s,dice,pieceIdx){
+    dice=dice|0;
+    var moves=legalMoves(s,dice),mv=null;
+    for (var k=0;k<moves.length;k++) if(moves[k].piece===pieceIdx){mv=moves[k];break;}
+    if(!mv) return null;
+    var out=clone(s),p=out.turn,arr=out.pieces[p],events=[];
+    var from=arr[pieceIdx];
+    arr[pieceIdx]=mv.to;
+    out.dice=dice;
+    events.push({type:mv.takeoff?'takeoff':'move',player:p,piece:pieceIdx,from:from,to:mv.to});
+    if(mv.to<N_MAIN){ captureAt(out,p,mv.to,events); maybeJump(out,p,pieceIdx,events); }
+    else if(mv.to===GOAL) events.push({type:'finished',player:p,piece:pieceIdx});
+    if(arr.every(function(x){return x===GOAL;})){ out.winner=p; if(out.finished.indexOf(p)<0) out.finished.push(p); events.push({type:'win',player:p}); }
+    if(dice===6&&out.winner===null) out.six=true;
+    else { out.six=false; nextTurn(out); }
+    out._events=events;
+    return out;
+  }
+  function skip(s,dice){
+    var out=clone(s); out.dice=dice;
+    if(dice===6&&out.winner===null) out.six=true;
+    else { out.six=false; nextTurn(out); }
+    out._events=[{type:'skip',player:s.turn}];
+    return out;
+  }
+  function serialize(s){
+    var rows=[];
+    for (var p=0;p<4;p++) rows.push(s.pieces[p]?s.pieces[p].join(','):'x');
+    return [s.n,s.turn,s.dice,s.six?1:0,s.winner===null?'x':s.winner,s.finished.join('.'),rows.join(';')].join('|');
+  }
+  function parse(fen){
+    var a=String(fen).split('|');
+    if(a.length<7) return null;
+    var rows=a[6].split(';'),pieces=[];
+    for (var p=0;p<4;p++) pieces.push(rows[p]&&rows[p]!=='x'?rows[p].split(',').map(Number):null);
+    return { n:+a[0],turn:+a[1],dice:+a[2],six:a[3]==='1',winner:a[4]==='x'?null:+a[4],
+      finished:a[5]?a[5].split('.').filter(Boolean).map(Number):[],pieces:pieces };
+  }
+  root.FlightEngine = { PATH:PATH, N_MAIN:N_MAIN, GOAL:GOAL, COLORS:COLORS,
+    newState:newState, clone:clone, trackIndex:trackIndex, absCell:absCell, cellOf:cellOf,
+    legalMoves:legalMoves, apply:apply, skip:skip, captureAt:captureAt, maybeJump:maybeJump,
+    serialize:serialize, parse:parse };
+})(typeof window !== 'undefined' ? window : globalThis);
+</script>
 <script>
 (function () {
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -2756,7 +2981,7 @@
   // ===== 游戏费率（服务端为唯一真相源）=====
   // ⚠️ 价格文案不要再硬编码：统一从 GET /api/game/fees 拉取，
   //    保证「界面显示的价」永远等于「实际扣的价」。
-  var GAME_FEES = { match3: 50, chess: 28, xiangqi: 28, gomoku: 42, go: 42 };
+  var GAME_FEES = { match3: 50, chess: 28, xiangqi: 28, gomoku: 42, go: 42, flight: 40 };
 
   function feeOf(type) {
     var f = GAME_FEES[type];
@@ -2844,6 +3069,8 @@
       }
       var d = {};
       try { d = JSON.parse(e.data); } catch (err) { return; }
+      // 飞行棋定向推送（game:'flight'）→ 交给飞行棋处理器，不进聊天流
+      if (d.game === 'flight' && typeof handleFlightPush === 'function') { handleFlightPush(d); return; }
       if (d.type === 'history') {
         currentRoom = d.room;
         pendingJoinRoom = null;
@@ -3160,6 +3387,7 @@
   var gameLobby = document.getElementById('gameLobby');
   var gamePayPanel = document.getElementById('gamePayPanel');
   var gameRoomPanel = document.getElementById('gameRoomPanel');
+  var flightRoomPanel = document.getElementById('flightRoomPanel');
   var gameErr = document.getElementById('gameErr');
   var payErr = document.getElementById('payErr');
   var joinRoomBox = document.getElementById('joinRoomBox');
@@ -3170,7 +3398,7 @@
   var redeemPanel = document.getElementById('redeemPanel');
   var shopPanel = document.getElementById('shopPanel');
   var zipPanel = document.getElementById('zipPanel');
-  var PANELS = [chatPanel, cmdPanel, redeemPanel, logPanel, ctrlPanel, settingsPanel, gameLobby, gamePayPanel, gameRoomPanel, shopPanel, cloudPanel, membersPanel, zipPanel];
+  var PANELS = [chatPanel, cmdPanel, redeemPanel, logPanel, ctrlPanel, settingsPanel, gameLobby, gamePayPanel, gameRoomPanel, flightRoomPanel, shopPanel, cloudPanel, membersPanel, zipPanel];
   function showOnly(el) {
     PANELS.forEach(function (p) { if (p) p.classList.toggle('hidden', p !== el); });
     inCmdPage = (el === cmdPanel);
@@ -3183,13 +3411,14 @@
 
   // ===== 游戏大厅 =====
   function showGamePanel(which) {
-    showOnly(which === 'lobby' ? gameLobby : which === 'pay' ? gamePayPanel : which === 'room' ? gameRoomPanel : chatPanel);
+    showOnly(which === 'lobby' ? gameLobby : which === 'pay' ? gamePayPanel : which === 'room' ? gameRoomPanel : which === 'flight' ? flightRoomPanel : chatPanel);
   }
   function gameTypeName(t) {
     if (t === 'xiangqi') return '中国象棋';
     if (t === 'gomoku') return '五子棋';
     if (t === 'go') return '围棋（中国规则）';
     if (t === 'match3') return '消消乐';
+    if (t === 'flight') return '飞行棋（速率1.00）';
     return '国际象棋';
   }
   function refreshMe() {
@@ -3200,6 +3429,360 @@
       }
     });
   }
+
+  // ==========================================================================
+  // 飞行棋（4 人，独立系统，速率固定 1.00）
+  // ==========================================================================
+  var FE = window.FlightEngine;
+  var fl = null;          // { roomId, iAmCreator, mySeat, players, human, ai, state, ... }
+  var flPoll = null;      // 轮询定时器
+  var flHuman = 4, flAi = 0; // 建房参数
+  var flRolling = false;
+
+  function flSetupVals() {
+    var hv = document.getElementById('flHumanVal'), av = document.getElementById('flAiVal');
+    if (hv) hv.textContent = String(flHuman);
+    if (av) av.textContent = String(flAi);
+  }
+  function flAdjust(d) {
+    if (d.h) flHuman = Math.max(1, Math.min(4, flHuman + d.h));
+    if (d.a) flAi = Math.max(0, Math.min(3, flAi + d.a));
+    if (flHuman + flAi > 4) { if (d.h > 0) flAi = 4 - flHuman; else flHuman = 4 - flAi; }
+    flSetupVals();
+  }
+  function flShowErr(msg) { var e = document.getElementById('flErr'); if (e) e.textContent = msg || ''; }
+  function flStatus(txt) { var e = document.getElementById('flStatusText'); if (e) e.textContent = txt; }
+  function flTurn(txt) { var e = document.getElementById('flTurn'); if (e) e.innerHTML = txt || ''; }
+
+  // 进入飞行棋房间面板
+  function flEnter(data) {
+    fl = {
+      roomId: data.roomId, iAmCreator: !!data.self || !!data.iAmCreator,
+      mySeat: (data.seat !== undefined ? data.seat : -1),
+      human: data.human, ai: data.ai, players: data.players || [],
+      state: data.state || null, creator: data.creator || ''
+    };
+    if (data.iAmCreator !== undefined) fl.iAmCreator = data.iAmCreator;
+    flStopPoll();
+    flStartPoll();
+    showGamePanel('flight');
+    var rid = document.getElementById('flRoomId'); if (rid) rid.textContent = fl.roomId;
+    var meta = document.getElementById('flRoomMeta');
+    if (meta) meta.textContent = '真人 ' + fl.human + ' · AI ' + fl.ai;
+    flRender();
+    flPollState(); // 立即拉一次最新状态
+  }
+  function flExit() {
+    flStopPoll(); fl = null; showGamePanel(null);
+  }
+  function flStopPoll() { if (flPoll) { clearInterval(flPoll); flPoll = null; } }
+  function flStartPoll() { if (!flPoll) flPoll = setInterval(flPollState, 2000); }
+
+  async function flPollState() {
+    if (!fl) return;
+    var r = await api('/api/flight/state?roomId=' + encodeURIComponent(fl.roomId));
+    if (!r.ok) { if (r.status === 404) { flShowErr('房间已不存在'); flExit(); } return; }
+    var d = r.data;
+    fl.players = d.players || [];
+    fl.human = d.room.human; fl.ai = d.room.ai;
+    fl.iAmCreator = d.iAmCreator;
+    fl.mySeat = d.seat;
+    fl.creator = d.room.creator;
+    fl.state = d.room.state;
+    fl.status = d.room.status;
+    fl.winner = d.room.winner;
+    fl.ready = d.ready;
+    flRender();
+    // 轮到 AI 且当前是我（真人）在驱动 → 自动帮 AI 走
+    flMaybeDriveAI();
+  }
+
+  // 渲染玩家卡片 + 棋盘 + 控制
+  function flRender() {
+    if (!fl) return;
+    // 玩家卡片
+    var pc = document.getElementById('flPlayers');
+    if (pc) {
+      pc.innerHTML = '';
+      for (var s = 0; s < 4; s++) {
+        var p = fl.players.find(function (x) { return x.seat === s; });
+        if (!p) continue;
+        var col = FE.COLORS[s];
+        var act = fl.state && FE.parse(fl.state) && FE.parse(fl.state).turn === s && fl.status === 'playing';
+        var card = document.createElement('div');
+        card.className = 'fl-pcard' + (act ? ' active' : '');
+        card.style.color = col.hex;
+        card.innerHTML = '<span class="fl-pdot"></span><span class="fl-pname">' + escHtml(p.name) + '</span>' +
+          '<span class="fl-pseat">' + col.name + (p.kind === 'ai' ? '·AI' : '') + (s === 0 ? '·房主' : '') + '</span>';
+        pc.appendChild(card);
+      }
+    }
+    // 状态
+    flStatus(fl.status === 'waiting' ? ('等待玩家 ' + fl.players.filter(function(p){return p.kind==='human';}).length + '/' + fl.human)
+      : fl.status === 'playing' ? '对局中' : fl.status === 'ended' ? '已结束' : '等待玩家');
+    // 棋盘
+    flRenderBoard();
+    // 控制按钮
+    var bs = document.getElementById('btnFlStart'), br = document.getElementById('btnFlRoll');
+    if (bs) bs.style.display = (fl.iAmCreator && fl.status === 'waiting' && fl.ready) ? '' : 'none';
+    var myTurn = false;
+    var st = fl.state ? FE.parse(fl.state) : null;
+    if (st && fl.status === 'playing') {
+      var actor = fl.players.find(function (x) { return x.seat === st.turn; });
+      myTurn = actor && actor.kind === 'human' && actor.username === myName;
+    }
+    if (br) br.style.display = (myTurn && fl.status === 'playing' && !flRolling) ? '' : 'none';
+    // 回合提示
+    if (fl.status === 'ended') {
+      flTurn(fl.winner ? ('🏆 ' + escHtml(fl.winner) + ' 获胜！') : '本局结束');
+    } else if (fl.status === 'waiting') {
+      flTurn(fl.iAmCreator ? (fl.ready ? '真人已凑齐，点「开局」' : '等待真人凑齐…') : '等待房主开局…');
+    } else if (st) {
+      var actor = fl.players.find(function (x) { return x.seat === st.turn; });
+      var an = actor ? actor.name : '?';
+      flTurn('轮到 <b style="color:' + (FE.COLORS[st.turn] ? FE.COLORS[st.turn].hex : '#fff') + '">' + escHtml(an) + '</b>' + (myTurn ? ' · 你掷骰' : ''));
+    }
+  }
+
+  // 画 15x15 棋盘（CSS Grid + 绝对定位飞机）
+  function flRenderBoard() {
+    var board = document.getElementById('flBoard');
+    if (!board || !FE) return;
+    board.innerHTML = '';
+    var grid = document.createElement('div'); grid.className = 'fl-grid';
+    // 建立坐标→格类型映射
+    var cellMap = {};
+    function mark(x, y, cls, color) {
+      var k = x + ',' + y;
+      cellMap[k] = cellMap[k] || { cls: '', color: '' };
+      cellMap[k].cls = cls;
+      if (color) cellMap[k].color = color.hex;
+    }
+    for (var i = 0; i < FE.PATH.length; i++) {
+      var c = FE.PATH[i];
+      var isStart = FE.COLORS.some(function (col) { return col.start === i; });
+      var col = null;
+      for (var s = 0; s < 4; s++) if (FE.COLORS[s].start === i) col = FE.COLORS[s];
+      mark(c[0], c[1], isStart ? 'track start' : 'track', col);
+    }
+    FE.COLORS.forEach(function (col) {
+      col.home.forEach(function (h) { mark(h[0], h[1], 'home', col); });
+      col.base.forEach(function (b) { mark(b[0], b[1], 'base', col); });
+    });
+    mark(7, 7, 'goal', null);
+    for (var y = 0; y < 15; y++) {
+      for (var x = 0; x < 15; x++) {
+        var el = document.createElement('div');
+        var info = cellMap[x + ',' + y];
+        el.className = 'fl-cell' + (info ? ' ' + info.cls : '');
+        if (info && info.color) el.style.color = info.color;
+        grid.appendChild(el);
+      }
+    }
+    board.appendChild(grid);
+    var center = document.createElement('div'); center.className = 'fl-center'; center.textContent = '★';
+    board.appendChild(center);
+    // 飞机
+    var st = fl.state ? FE.parse(fl.state) : null;
+    if (st) {
+      for (var p = 0; p < 4; p++) {
+        if (!st.pieces[p]) continue;
+        var col = FE.COLORS[p];
+        var baseIdx = 0;
+        for (var pi = 0; pi < 4; pi++) {
+          var pr = st.pieces[p][pi];
+          if (pr >= FE.GOAL) continue; // 已到家不显示（或显示在中心堆叠）
+          var pos = FE.cellOf(p, pr);
+          var px = 0, py = 0;
+          if (pos.type === 'base') {
+            var bp = col.base[baseIdx++]; px = bp[0]; py = bp[1];
+          } else if (pos.pos) { px = pos.pos[0]; py = pos.pos[1]; }
+          var piece = document.createElement('div');
+          piece.className = 'fl-piece' + (col.base.length > 4 ? ' tiny' : '');
+          piece.style.left = ((px + 0.5) / 15 * 100) + '%';
+          piece.style.top = ((py + 0.5) / 15 * 100) + '%';
+          piece.style.background = col.hex; piece.style.color = col.hex;
+          piece.textContent = String(pi + 1);
+          piece.title = col.name + ' 机 ' + (pi + 1) + (pr < 0 ? '（机场）' : '（行进 ' + pr + '）');
+          (function (seat, pidx) {
+            piece.addEventListener('click', function () { flChoosePiece(seat, pidx); });
+          })(p, pi);
+          board.appendChild(piece);
+        }
+      }
+    }
+  }
+
+  // 玩家点自己的飞机 → 若已掷骰且有合法走法，提交走子
+  function flChoosePiece(seat, pieceIdx) {
+    if (!fl || !fl.state) return;
+    var st = FE.parse(fl.state);
+    if (st.turn !== seat) { flShowErr('还没轮到这架飞机所属玩家'); return; }
+    var actor = fl.players.find(function (x) { return x.seat === seat; });
+    if (!actor || actor.kind !== 'human' || actor.username !== myName) { flShowErr('只能操作自己的飞机'); return; }
+    if (!st.dice) { flShowErr('请先掷骰'); return; }
+    var moves = FE.legalMoves(st, st.dice);
+    var mv = moves.find(function (m) { return m.piece === pieceIdx; });
+    if (!mv) { flShowErr('这架飞机本回合不能动（起飞需掷6 / 不可越过终点）'); return; }
+    flDoMove(st, pieceIdx);
+  }
+
+  // 提交走子（新 state 由引擎算好）
+  async function flDoMove(st, pieceIdx) {
+    var ns = FE.apply(st, st.dice, pieceIdx);
+    if (!ns) { flShowErr('非法走法'); return; }
+    flShowErr('');
+    var payload = { roomId: fl.roomId, state: FE.serialize(ns) };
+    var r = await api('/api/flight/move', payload);
+    if (!r.ok) { flShowErr(r.data.error || '走子失败'); flPollState(); return; }
+    if (r.data.winner) { flShowErr(''); }
+    fl.state = r.data.state;
+    flRender();
+  }
+
+  // 掷骰
+  document.getElementById('btnFlRoll').addEventListener('click', async function () {
+    if (!fl || flRolling) return;
+    flRolling = true;
+    flShowErr('');
+    var de = document.getElementById('flDice');
+    if (de) { de.classList.add('rolling'); de.textContent = '?'; }
+    var r = await api('/api/flight/roll', { roomId: fl.roomId });
+    setTimeout(function () {
+      flRolling = false;
+      if (de) de.classList.remove('rolling');
+      if (!r.ok) { flShowErr(r.data.error || '掷骰失败'); flRender(); return; }
+      if (de) de.textContent = String(r.data.dice);
+      fl.state = r.data.state;
+      // 若有合法走法，提示点飞机；否则自动跳过
+      var st = FE.parse(fl.state);
+      var moves = FE.legalMoves(st, st.dice);
+      if (!moves.length) {
+        flShowErr('无合法走法，自动跳过本回合');
+        var ns = FE.skip(st, st.dice);
+        api('/api/flight/move', { roomId: fl.roomId, state: FE.serialize(ns) }).then(function (rr) {
+          if (rr.ok) { fl.state = rr.data.state; flRender(); }
+        });
+      } else {
+        flTurn(st.dice === 6 ? '掷出 6！点一架飞机起飞/移动（可再掷）' : '掷出 ' + st.dice + '，点一架飞机移动');
+      }
+      flRender();
+    }, 480);
+  });
+
+  // 开局
+  document.getElementById('btnFlStart').addEventListener('click', async function () {
+    if (!fl) return;
+    flShowErr('');
+    var r = await api('/api/flight/start', { roomId: fl.roomId });
+    if (!r.ok) { flShowErr(r.data.error || '开局失败'); return; }
+    fl.state = r.data.state; fl.status = 'playing'; flRender();
+  });
+
+  // AI 驱动：轮到 AI 且当前在线的是真人时，由该客户端代 AI 掷骰+走子
+  var flAiBusy = false;
+  async function flMaybeDriveAI() {
+    if (!fl || flAiBusy || fl.status !== 'playing' || !fl.state) return;
+    var st = FE.parse(fl.state);
+    var actor = fl.players.find(function (x) { return x.seat === st.turn; });
+    if (!actor || actor.kind !== 'ai') return;
+    flAiBusy = true;
+    try {
+      // AI 掷骰：服务端 roll 只放行真人（当前 turn 是 AI）→ 客户端代 AI 用随机骰子走子，不调 roll
+      var dice = 1 + Math.floor(Math.random() * 6);
+      var s2 = FE.clone(st);
+      var moves = FE.legalMoves(s2, dice);
+      var ns;
+      if (moves.length) {
+        var pick = moves[Math.floor(Math.random() * moves.length)];
+        ns = FE.apply(s2, dice, pick.piece);
+      } else {
+        ns = FE.skip(s2, dice);
+      }
+      if (ns) {
+        var de = document.getElementById('flDice'); if (de) de.textContent = String(dice);
+        var r = await api('/api/flight/move', { roomId: fl.roomId, state: FE.serialize(ns), aiAct: true });
+        if (r.ok) { fl.state = r.data.state; flRender(); }
+      }
+    } catch (e) {}
+    flAiBusy = false;
+  }
+
+  // WS 推送处理
+  function handleFlightPush(d) {
+    if (!fl || d.roomId !== fl.roomId) return;
+    if (d.type === 'flight-join' || d.type === 'flight-leave') {
+      fl.players = d.players || fl.players; flRender();
+    } else if (d.type === 'flight-start') {
+      fl.state = d.state; fl.status = 'playing'; flRender();
+    } else if (d.type === 'flight-roll') {
+      var de = document.getElementById('flDice'); if (de) de.textContent = String(d.dice);
+      flPollState();
+    } else if (d.type === 'flight-move') {
+      fl.state = d.state; if (d.winner) { fl.status = 'ended'; fl.winner = d.winner; }
+      flRender();
+    } else if (d.type === 'flight-deleted') {
+      flShowErr('房间已被房主删除'); setTimeout(flExit, 800);
+    }
+  }
+
+  // 建房参数 UI 事件
+  document.getElementById('btnFlightCreate').addEventListener('click', function () {
+    document.getElementById('flightSetupBox').classList.remove('hidden');
+    document.getElementById('flightJoinBox').classList.add('hidden');
+    flSetupVals();
+  });
+  document.getElementById('flHumanMinus').addEventListener('click', function () { flAdjust({ h: -1 }); });
+  document.getElementById('flHumanPlus').addEventListener('click', function () { flAdjust({ h: 1 }); });
+  document.getElementById('flAiMinus').addEventListener('click', function () { flAdjust({ a: -1 }); });
+  document.getElementById('flAiPlus').addEventListener('click', function () { flAdjust({ a: 1 }); });
+  document.getElementById('btnFlightSetupCancel').addEventListener('click', function () {
+    document.getElementById('flightSetupBox').classList.add('hidden');
+  });
+  document.getElementById('btnFlightCreateGo').addEventListener('click', async function () {
+    var errEl = document.getElementById('flErr'); if (errEl) errEl.textContent = '';
+    var r = await api('/api/flight/create', { human: flHuman, ai: flAi });
+    if (!r.ok) { if (errEl) errEl.textContent = r.data.error || '建房失败'; return; }
+    refreshMe();
+    document.getElementById('flightSetupBox').classList.add('hidden');
+    flEnter({ roomId: r.data.roomId, self: true, human: r.data.human, ai: r.data.ai,
+      players: r.data.players, creator: r.data.creator, seat: r.data.seat });
+    appendSys('✈ 飞行棋房间 ' + r.data.roomId + ' 已创建（花费 ' + r.data.fee + ' Credits，速率 1.00）· 真人 ' + flHuman + ' / AI ' + flAi);
+  });
+  document.getElementById('btnFlightJoin').addEventListener('click', function () {
+    document.getElementById('flightJoinBox').classList.remove('hidden');
+    document.getElementById('flightSetupBox').classList.add('hidden');
+    document.getElementById('flightJoinInput').focus();
+  });
+  document.getElementById('btnFlightJoinGo').addEventListener('click', async function () {
+    var inp = document.getElementById('flightJoinInput');
+    var rid = (inp.value || '').trim().toUpperCase();
+    if (!rid) { flShowErr('输入房间号'); return; }
+    var r = await api('/api/flight/join', { roomId: rid });
+    if (!r.ok) { flShowErr(r.data.error || '加入失败'); return; }
+    refreshMe();
+    document.getElementById('flightJoinBox').classList.add('hidden');
+    flEnter({ roomId: r.data.roomId, self: !!r.data.self, iAmCreator: !!r.data.self,
+      already: !!r.data.already, human: r.data.human, ai: r.data.ai, players: r.data.players,
+      creator: r.data.creator, seat: r.data.seat });
+  });
+  document.getElementById('flightJoinInput').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') document.getElementById('btnFlightJoinGo').click();
+  });
+  document.getElementById('btnFlLeave').addEventListener('click', async function () {
+    if (!fl) return;
+    var rid = fl.roomId;
+    try { await api('/api/flight/leave', { roomId: rid }); } catch (e) {}
+    flExit();
+  });
+
+  // SHOP 的飞行棋按钮 → 跳到游戏大厅建房
+  document.getElementById('btnShopFlight').addEventListener('click', function () {
+    showGamePanel('lobby');
+    document.getElementById('flightSetupBox').classList.remove('hidden');
+    document.getElementById('flightJoinBox').classList.add('hidden');
+    flSetupVals();
+  });
 
   document.getElementById('btnGame').addEventListener('click', function () {
     gameErr.textContent = '';
