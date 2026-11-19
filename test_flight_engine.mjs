@@ -10,29 +10,43 @@ if (!m) { console.error("找不到 flightEngine script"); process.exit(2); }
 const FE = globalThis.FlightEngine;
 if (!FE) { console.error("FlightEngine 未挂载"); process.exit(2); }
 
-const { PATH, N_MAIN, GOAL, COLORS, newState, legalMoves, apply, cellOf, absCell, serialize, parse } = FE;
+const { PATH, N_MAIN, GOAL, COLORS, cellColor, newState, legalMoves, apply, cellOf, absCell, serialize, parse } = FE;
 let pass = 0, fail = 0;
 const ok = (c, n, extra) => { if (c) { pass++; console.log("  ✓ " + n); } else { fail++; console.log("  ✗ " + n + (extra !== undefined ? " → " + JSON.stringify(extra) : "")); } };
 
-console.log("=== 路径验证 ===");
+console.log("=== 路径 / 颜色验证 ===");
 {
-  let good = PATH.length === 56;
+  let good = PATH.length === 52;
   const seen = new Set();
+  let diag = 0;
   for (let i = 0; i < PATH.length; i++) {
     const k = PATH[i].join(",");
     if (seen.has(k)) good = false;
     seen.add(k);
     const a = PATH[i], b = PATH[(i + 1) % PATH.length];
-    if (Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) !== 1) good = false;
+    const d = Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]);
+    if (d === 2) diag++;
+    if (d !== 1 && d !== 2) good = false;
   }
-  ok(good, "56格闭合环相邻无重复");
+  ok(good && diag === 4, "52格环(4拐角对角)无重复");
   let smooth = true;
   COLORS.forEach((c, seat) => {
-    const before = absCell(seat, 55), home0 = c.home[0];
+    const before = absCell(seat, 51), home0 = c.home[0];
     if (Math.abs(before[0] - home0[0]) + Math.abs(before[1] - home0[1]) !== 1) smooth = false;
   });
   ok(smooth, "四归航道入口与主轨道平滑衔接");
-  ok(COLORS.map(c => c.start).join(",") === "28,42,14,0", "四起飞点均分(间隔14)");
+  ok(COLORS.map(c => c.start).join(",") === "0,13,26,39", "四起飞点间隔13");
+  const mods = COLORS.map(c => c.start % 4);
+  ok(new Set(mods).size === 4, "四起飞点颜色不重合(0/1/2/3)");
+  // 跳格颜色一致：progress%4==0 的格子色 == 该玩家起飞色
+  let colorOk = true;
+  COLORS.forEach((c, seat) => {
+    for (let p = 4; p < N_MAIN; p += 4) {
+      const cellIdx = (c.start + p) % N_MAIN;
+      if (cellColor(cellIdx) !== c.start % 4) { colorOk = false; break; }
+    }
+  });
+  ok(colorOk, "每4格跳格颜色=自己起飞色(跳跃有据可查)");
 }
 
 console.log("=== 规则自测 ===");
@@ -61,20 +75,20 @@ console.log("=== 规则自测 ===");
 }
 {
   let s = newState(2);
-  s.pieces[0][0] = 5; s.pieces[1][0] = 48; s.turn = 0;
+  s.pieces[0][0] = 5; s.pieces[1][0] = 45; s.turn = 0;
   s = apply(s, 1, 0);
   ok(s.pieces[1][0] === -1, "撞子送回机场");
 }
 {
-  let s = newState(1); s.pieces[0][0] = 54;
+  let s = newState(1); s.pieces[0][0] = 50;
   s = apply(s, 2, 0);
-  ok(cellOf(0, s.pieces[0][0]).type === "home", "progress56进归航道");
-  let t = newState(1); t.pieces[0][0] = 60;
+  ok(cellOf(0, s.pieces[0][0]).type === "home", "progress52进归航道");
+  let t = newState(1); t.pieces[0][0] = 56;
   t = apply(t, 2, 0);
-  ok(cellOf(0, t.pieces[0][0]).type === "goal", "progress62到终点");
+  ok(cellOf(0, t.pieces[0][0]).type === "goal", "progress58到终点");
 }
 {
-  let s = newState(1); s.pieces[0] = [61, 62, 62, 62];
+  let s = newState(1); s.pieces[0] = [57, 58, 58, 58];
   s = apply(s, 1, 0);
   ok(s.winner === 0, "4子全到终点→胜");
 }

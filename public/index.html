@@ -712,31 +712,33 @@
   .fl-pname { color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:96px; }
   .fl-pseat { color:var(--dim); font-size:10px; }
   .fl-stage { display:flex; justify-content:center; padding:8px 0; }
-  .fl-board { position:relative; width:min(92vw,560px); aspect-ratio:1/1; background:#0c0c18;
-    border:2px solid #ff2e97; border-radius:14px;
-    box-shadow:0 0 24px rgba(255,46,151,.35), inset 0 0 40px rgba(0,0,0,.6); overflow:hidden; }
+  .fl-board { position:relative; width:min(94vw,600px); aspect-ratio:1/1; background:#0a0a14;
+    border:3px solid #ff2e97; border-radius:20px;
+    box-shadow:0 0 28px rgba(255,46,151,.45), inset 0 0 50px rgba(0,0,0,.7); overflow:hidden; }
   .fl-grid { position:absolute; inset:0; display:grid; grid-template-columns:repeat(15,1fr); grid-template-rows:repeat(15,1fr); }
-  .fl-cell { border:.5px solid rgba(255,255,255,.04); }
-  .fl-cell.track { background:#16162a; border:1px solid #26264a; border-radius:3px; margin:6%; }
-  .fl-cell.start { border-radius:3px; margin:4%; box-shadow:0 0 8px currentColor; }
-  .fl-cell.home { border-radius:3px; margin:10%; opacity:.55; }
-  .fl-cell.base { border-radius:4px; margin:6%; opacity:.35; }
-  .fl-cell.goal { background:radial-gradient(circle,#3a2f00,#0c0c18); border:2px solid var(--amber); border-radius:50%; margin:4%; box-shadow:0 0 16px rgba(255,184,0,.6); }
-  .fl-center { position:absolute; left:47%; top:47%; width:6%; height:6%; display:flex; align-items:center; justify-content:center;
-    font-size:clamp(12px,3vw,20px); color:var(--amber); text-shadow:0 0 10px var(--amber); pointer-events:none; }
-  .fl-piece { position:absolute; width:3.4%; height:3.4%; border-radius:50%; transform:translate(-50%,-50%);
-    border:1.5px solid #fff; box-shadow:0 0 8px currentColor, inset 0 0 4px rgba(255,255,255,.5);
-    display:flex; align-items:center; justify-content:center; font-size:clamp(7px,1.6vw,11px); color:#fff;
-    transition:left .35s ease, top .35s ease; cursor:pointer; z-index:3; }
-  .fl-piece.sel { outline:2px solid #fff; outline-offset:2px; z-index:5; }
-  .fl-piece.tiny { width:2.6%; height:2.6%; font-size:clamp(6px,1.2vw,9px); }
+  .fl-cell { position:relative; }
+  .fl-cell.track { margin:4%; border-radius:22%; background:currentColor;
+    border:1.5px solid rgba(255,255,255,.35);
+    box-shadow:inset 0 0 6px rgba(255,255,255,.35), 0 0 5px currentColor; }
+  .fl-cell.start { margin:2%; border-radius:26%; border:2px solid #fff; box-shadow:0 0 14px currentColor, inset 0 0 8px rgba(255,255,255,.5); }
+  .fl-cell.home { margin:6%; border-radius:30%; opacity:.9; border:1.5px solid rgba(255,255,255,.4); box-shadow:inset 0 0 6px rgba(0,0,0,.4); }
+  .fl-cell.base { margin:4%; border-radius:26%; opacity:.9; border:2px solid currentColor; box-shadow:inset 0 0 10px currentColor; }
+  .fl-cell.goal { background:radial-gradient(circle,#5a4600,#1a1400); border:3px solid var(--amber); border-radius:50%; margin:2%; box-shadow:0 0 20px rgba(255,184,0,.8); }
+  .fl-center { position:absolute; left:46.5%; top:46.5%; width:7%; height:7%; display:flex; align-items:center; justify-content:center;
+    font-size:clamp(13px,3.4vw,22px); color:var(--amber); text-shadow:0 0 12px var(--amber); pointer-events:none; }
+  .fl-piece { position:absolute; width:4.4%; height:4.4%; border-radius:50%; transform:translate(-50%,-50%);
+    border:2px solid #fff; box-shadow:0 0 10px currentColor, inset 0 0 5px rgba(255,255,255,.6);
+    display:flex; align-items:center; justify-content:center; font-size:clamp(9px,2vw,13px); font-weight:500; color:#fff;
+    transition:left .4s cubic-bezier(.4,0,.2,1), top .4s cubic-bezier(.4,0,.2,1); cursor:pointer; z-index:3; }
+  .fl-piece.sel { outline:3px solid #fff; outline-offset:2px; z-index:5; }
+  .fl-piece.tiny { width:3.4%; height:3.4%; font-size:clamp(7px,1.6vw,11px); }
   .fl-controls { text-align:center; margin-top:10px; }
   .fl-turn { font-size:13px; color:var(--cyan); min-height:20px; }
   .fl-dice-wrap { display:flex; justify-content:center; margin:8px 0; }
   .fl-dice { width:52px; height:52px; border:2px solid var(--cyan); border-radius:10px; background:#0e0e1c;
     display:flex; align-items:center; justify-content:center; font-size:26px; font-weight:500; color:var(--cyan);
     box-shadow:0 0 16px rgba(0,240,255,.4); }
-  .fl-dice.rolling { animation:flRoll .5s linear infinite; }
+  .fl-dice.rolling { animation:flRoll .3s linear infinite; }
   @keyframes flRoll { 0%{transform:rotate(0)} 25%{transform:rotate(90deg) scale(1.08)} 50%{transform:rotate(180deg)} 75%{transform:rotate(270deg) scale(1.08)} 100%{transform:rotate(360deg)} }
   .fl-moves { display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-top:8px; }
 </style>
@@ -972,9 +974,9 @@
           <button class="btn small magenta wide" data-game-buy="match3">购买并开始</button>
         </div>
         <div class="lobby-card" style="border-color:#ff2e97">
-          <div class="t">✈ 飞行棋 <span style="font-size:10px;color:#00f0ff">速率 1.00</span></div>
+          <div class="t">✈ 飞行棋</div>
           <div class="d"><span class="fee" data-fee="flight">40</span> Credits / 局 · 1-4 真人 + 0-3 AI · 4 色</div>
-          <button class="btn small magenta wide" id="btnFlightCreate">▸ 建房（设参数）</button>
+          <button class="btn small magenta wide" id="btnFlightCreate">▸ 建房</button>
           <button class="btn small wide" id="btnFlightJoin">输入房间号加入</button>
         </div>
       </div>
@@ -991,7 +993,7 @@
           <b id="flAiVal" style="min-width:20px;text-align:center">0</b>
           <button class="btn small" id="flAiPlus" type="button">+</button>
         </div>
-        <p class="hint" style="margin:0 0 8px;font-size:11px">真人 1-4、AI 0-3，合计不超过 4。速率固定 1.00 不可调。真人全部凑齐后由房主开局；每人 <span class="fee" data-fee="flight">40</span> Credits。</p>
+        <p class="hint" style="margin:0 0 8px;font-size:11px">真人 1-4、AI 0-3，合计不超过 4。真人全部凑齐后由房主开局；每人 <span class="fee" data-fee="flight">40</span> Credits。</p>
         <div class="tool-row"><button class="btn small magenta" id="btnFlightCreateGo" type="button">▸ 确认建房并扣费</button><button class="btn small" id="btnFlightSetupCancel" type="button">取消</button></div>
       </div>
       <!-- 飞行棋加入房间号输入 -->
@@ -1024,7 +1026,7 @@
         <p class="market-note">
           <b>🍬 消消乐</b>：单人连线消除，买完直接开玩（<span class="fee" data-fee="match3">50</span> Credits）。<br>
           <b>♟ 国际象棋 / ♞ 中国象棋</b>：真人对战，买完把房间号发给好友，人齐了点「开始棋局」（<span class="fee" data-fee="chess">28</span> Credits / 局）。<br>
-          <b>✈ 飞行棋</b>：1-4 真人 + 0-3 AI，四色对战，真人凑齐开局，速率固定 1.00（<span class="fee" data-fee="flight">40</span> Credits / 局，请到「游戏大厅」建房设参数）。
+          <b>✈ 飞行棋</b>：1-4 真人 + 0-3 AI，四色对战，真人凑齐开局（<span class="fee" data-fee="flight">40</span> Credits / 局，请到「游戏大厅」建房）。
         </p>
         <div class="tool-row" style="justify-content:center">
           <button class="btn small magenta" data-shop-buy="match3" type="button">🍬 消消乐 · <span class="fee" data-fee="match3">50</span></button>
@@ -1264,7 +1266,7 @@
     <!-- 飞行棋房间（4人，独立面板） -->
     <div class="panel hidden" id="flightRoomPanel">
       <div class="chat-head">
-        <div class="who">✈ 飞行棋 房间 <b id="flRoomId">-</b> · 速率 <b style="color:#00f0ff">1.00</b> · <span id="flRoomMeta">-</span></div>
+        <div class="who">✈ 飞行棋 房间 <b id="flRoomId">-</b> · <span id="flRoomMeta">-</span></div>
         <span class="conn-badge" id="flStatusBadge"><span class="dot"></span><span id="flStatusText">等待玩家</span></span>
       </div>
       <div class="fl-players" id="flPlayers"></div>
@@ -2504,37 +2506,39 @@
 (function (root) {
   'use strict';
   // 飞行棋规则引擎 · 纯逻辑零 DOM · 与 test_flight_engine.mjs 共用
-  // 坐标 [col,row]，15x15。主轨道 56 格闭合环（含4拐角格），每步严格相邻。
+  // 坐标 [col,row]，15x15。主轨道 52 格闭合环（经典飞行棋），4 个拐角走对角线。
   var PATH = [
-    [0,6],[1,6],[2,6],[3,6],[4,6],[5,6],
-    [6,6],[6,5],[6,4],[6,3],[6,2],[6,1],[6,0],
-    [7,0],[8,0],
-    [8,1],[8,2],[8,3],[8,4],[8,5],[8,6],
-    [9,6],[10,6],[11,6],[12,6],[13,6],[14,6],
-    [14,7],[14,8],
-    [13,8],[12,8],[11,8],[10,8],[9,8],[8,8],
-    [8,9],[8,10],[8,11],[8,12],[8,13],[8,14],
-    [7,14],[6,14],
     [6,13],[6,12],[6,11],[6,10],[6,9],[6,8],
     [5,8],[4,8],[3,8],[2,8],[1,8],[0,8],
-    [0,7]
+    [0,7],
+    [0,6],[1,6],[2,6],[3,6],[4,6],[5,6],
+    [6,5],[6,4],[6,3],[6,2],[6,1],[6,0],
+    [7,0],
+    [8,0],[8,1],[8,2],[8,3],[8,4],[8,5],
+    [9,6],[10,6],[11,6],[12,6],[13,6],[14,6],
+    [14,7],
+    [14,8],[13,8],[12,8],[11,8],[10,8],[9,8],
+    [8,9],[8,10],[8,11],[8,12],[8,13],[8,14],
+    [7,14]
   ];
-  var N_MAIN = PATH.length; // 56
+  var N_MAIN = PATH.length; // 52
   var HOME_LEN = 6;
-  var GOAL = N_MAIN + HOME_LEN; // 62
-  // seat 0红 1黄 2绿 3蓝 —— 起飞点均分（间隔14）
+  var GOAL = N_MAIN + HOME_LEN; // 58
+  // 每格颜色 = index%4 → 0红 1黄 2绿 3蓝（四色循环，跳跃看颜色）
+  function cellColor(i){ return i % 4; }
+  // seat 0红 1黄 2绿 3蓝 —— 起飞点间隔13，start%4 互不相同(0/1/2/3)，跳格不串色
   var COLORS = [
-    { key:'red',    name:'红', hex:'#ff3b5c', start:28,
-      home:[[13,7],[12,7],[11,7],[10,7],[9,7],[8,7]],
-      base:[[10,10],[12,10],[10,12],[12,12]] },
-    { key:'yellow', name:'黄', hex:'#ffcf3d', start:42,
+    { key:'red',    name:'红', hex:'#ff3b5c', start:0,
       home:[[7,13],[7,12],[7,11],[7,10],[7,9],[7,8]],
+      base:[[10,10],[12,10],[10,12],[12,12]] },
+    { key:'yellow', name:'黄', hex:'#ffcf3d', start:13,
+      home:[[1,7],[2,7],[3,7],[4,7],[5,7],[6,7]],
       base:[[2,10],[4,10],[2,12],[4,12]] },
-    { key:'green',  name:'绿', hex:'#25e07a', start:14,
+    { key:'green',  name:'绿', hex:'#25e07a', start:26,
       home:[[7,1],[7,2],[7,3],[7,4],[7,5],[7,6]],
       base:[[10,2],[12,2],[10,4],[12,4]] },
-    { key:'blue',   name:'蓝', hex:'#33aaff', start:0,
-      home:[[1,7],[2,7],[3,7],[4,7],[5,7],[6,7]],
+    { key:'blue',   name:'蓝', hex:'#33aaff', start:39,
+      home:[[13,7],[12,7],[11,7],[10,7],[9,7],[8,7]],
       base:[[2,2],[4,2],[2,4],[4,4]] }
   ];
   function newState(n) {
@@ -2629,7 +2633,7 @@
     return { n:+a[0],turn:+a[1],dice:+a[2],six:a[3]==='1',winner:a[4]==='x'?null:+a[4],
       finished:a[5]?a[5].split('.').filter(Boolean).map(Number):[],pieces:pieces };
   }
-  root.FlightEngine = { PATH:PATH, N_MAIN:N_MAIN, GOAL:GOAL, COLORS:COLORS,
+  root.FlightEngine = { PATH:PATH, N_MAIN:N_MAIN, GOAL:GOAL, COLORS:COLORS, cellColor:cellColor,
     newState:newState, clone:clone, trackIndex:trackIndex, absCell:absCell, cellOf:cellOf,
     legalMoves:legalMoves, apply:apply, skip:skip, captureAt:captureAt, maybeJump:maybeJump,
     serialize:serialize, parse:parse };
@@ -3418,7 +3422,7 @@
     if (t === 'gomoku') return '五子棋';
     if (t === 'go') return '围棋（中国规则）';
     if (t === 'match3') return '消消乐';
-    if (t === 'flight') return '飞行棋（速率1.00）';
+    if (t === 'flight') return '飞行棋';
     return '国际象棋';
   }
   function refreshMe() {
@@ -3431,7 +3435,7 @@
   }
 
   // ==========================================================================
-  // 飞行棋（4 人，独立系统，速率固定 1.00）
+  // 飞行棋（4 人，独立系统）
   // ==========================================================================
   var FE = window.FlightEngine;
   var fl = null;          // { roomId, iAmCreator, mySeat, players, human, ai, state, ... }
@@ -3476,7 +3480,7 @@
     flStopPoll(); fl = null; showGamePanel(null);
   }
   function flStopPoll() { if (flPoll) { clearInterval(flPoll); flPoll = null; } }
-  function flStartPoll() { if (!flPoll) flPoll = setInterval(flPollState, 2000); }
+  function flStartPoll() { if (!flPoll) flPoll = setInterval(flPollState, 800); }
 
   async function flPollState() {
     if (!fl) return;
@@ -3558,12 +3562,12 @@
       cellMap[k].cls = cls;
       if (color) cellMap[k].color = color.hex;
     }
+    // 主轨道每格按四色循环着色（cellColor=i%4）——跳跃到自己颜色格前进4，看颜色即懂
     for (var i = 0; i < FE.PATH.length; i++) {
       var c = FE.PATH[i];
       var isStart = FE.COLORS.some(function (col) { return col.start === i; });
-      var col = null;
-      for (var s = 0; s < 4; s++) if (FE.COLORS[s].start === i) col = FE.COLORS[s];
-      mark(c[0], c[1], isStart ? 'track start' : 'track', col);
+      var cellCol = FE.COLORS[FE.cellColor(i)]; // 该格的四色循环颜色
+      mark(c[0], c[1], isStart ? 'track start' : 'track', cellCol);
     }
     FE.COLORS.forEach(function (col) {
       col.home.forEach(function (h) { mark(h[0], h[1], 'home', col); });
@@ -3667,7 +3671,7 @@
         flTurn(st.dice === 6 ? '掷出 6！点一架飞机起飞/移动（可再掷）' : '掷出 ' + st.dice + '，点一架飞机移动');
       }
       flRender();
-    }, 480);
+    }, 260);
   });
 
   // 开局
@@ -3747,7 +3751,7 @@
     document.getElementById('flightSetupBox').classList.add('hidden');
     flEnter({ roomId: r.data.roomId, self: true, human: r.data.human, ai: r.data.ai,
       players: r.data.players, creator: r.data.creator, seat: r.data.seat });
-    appendSys('✈ 飞行棋房间 ' + r.data.roomId + ' 已创建（花费 ' + r.data.fee + ' Credits，速率 1.00）· 真人 ' + flHuman + ' / AI ' + flAi);
+    appendSys('✈ 飞行棋房间 ' + r.data.roomId + ' 已创建（花费 ' + r.data.fee + ' Credits）· 真人 ' + flHuman + ' / AI ' + flAi);
   });
   document.getElementById('btnFlightJoin').addEventListener('click', function () {
     document.getElementById('flightJoinBox').classList.remove('hidden');

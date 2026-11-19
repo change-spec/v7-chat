@@ -29,6 +29,12 @@ jobs:
       - name: Install esbuild
         run: npm install --no-save esbuild@0.28.2
 
+      # 必须先由最新 public/index.html 生成 src/html.ts：
+      # GET / 返回的是 src/html.ts 里内联的 HTML，不是静态 index.html。
+      # 本地 src/html.ts 常被编辑器/进程锁住无法更新，CI 上无锁，这里现场生成保证首页最新。
+      - name: Build inline HTML
+        run: node build-html.mjs
+
       - name: Build Pages bundle
         run: node build-pages.mjs
 
