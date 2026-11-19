@@ -3267,26 +3267,44 @@ async function handleShopBuy(request: Request, env: Env): Promise<Response> {
     return json({ error: "未知的游戏类型" }, 400);
   }
   const fee = gameFeeFor(type);
-  // 先扣费再建房：扣费失败不留残局
-  if (!(await spendCredits(env, user.username, fee))) {
+
+  // 🔴 余额预检：余额不足直接拒绝，不进入写库
+  const acc = await env.DB.prepare("SELECT points FROM accounts WHERE username = ?")
+    .bind(user.username).first<{ points: number }>();
+  if (!acc || acc.points < fee) {
     return json({ error: "Credits 不足，开局需要 " + fee + " Credits" }, 402);
   }
-  await logCredits(env, user.username, -fee, type === "match3" ? "消消乐开局" : "对弈开局");
+
   // 房间号：6 位大写字母数字（去掉易混的 I/O/0/1）
   let id = "";
   for (let attempt = 0; attempt < 5; attempt++) {
-    id = genRoomId();
-    const exists = await env.DB.prepare("SELECT id FROM games WHERE id = ?").bind(id).first();
-    if (!exists) break;
-    id = "";
+    const cand = genRoomId();
+    const exists = await env.DB.prepare("SELECT id FROM games WHERE id = ?").bind(cand).first();
+    if (!exists) { id = cand; break; }
   }
   if (!id) return json({ error: "房间号生成失败，请重试" }, 500);
   const now = new Date().toISOString();
+  const reason = type === "match3" ? "消消乐开局" : "对弈开局";
   // 消消乐是单人局：直接进入 playing；棋类等对手加入后再由房主开局
   const status = type === "match3" ? "playing" : "waiting";
-  await env.DB.prepare(
-    "INSERT INTO games (id, type, creator, opponent, status, payer, board, turn, winner, created_at) VALUES (?, ?, ?, NULL, ?, ?, NULL, NULL, NULL, ?)"
-  ).bind(id, type, user.username, status, "self", now).run();
+
+  // 🔴 原子事务：扣费 + 流水 + 建房 要么全部成功，要么全部回滚。
+  //    旧代码「先 spendCredits 再 INSERT」中间任一步失败 → 钱扣了房间没建，
+  //    前端只看到 500/网络错误 → 用户反复点 → 重复扣费 + 一堆空房。
+  //    D1 batch 是原子的；UPDATE 再加 points >= fee 条件做并发双保险。
+  try {
+    await env.DB.batch([
+      env.DB.prepare("UPDATE accounts SET points = points - ? WHERE username = ? AND points >= ?")
+        .bind(fee, user.username, fee),
+      env.DB.prepare("INSERT INTO credits_logs (username, delta, reason, created_at) VALUES (?, ?, ?, ?)")
+        .bind(user.username, -fee, reason, now),
+      env.DB.prepare(
+        "INSERT INTO games (id, type, creator, opponent, status, payer, board, turn, winner, created_at) VALUES (?, ?, ?, NULL, ?, ?, NULL, NULL, NULL, ?)"
+      ).bind(id, type, user.username, status, "self", now),
+    ]);
+  } catch {
+    return json({ error: "创建房间失败，未扣费，请重试" }, 500);
+  }
   return json({ ok: true, roomId: id, type: type, fee: fee, creator: user.username });
 }
 
@@ -3549,32 +3567,10 @@ async function handleGameEnd(request: Request, env: Env): Promise<Response> {
   return json({ ok: true, winner: winner, result: resultText });
 }
 
-// 再来一局：房主把房间重置到「等待开始」，同一个对手可以继续下
-async function handleGameRestart(request: Request, env: Env): Promise<Response> {
-  await ensureGameSchema(env);
-  const user = await authUser(request, env);
-  if (!user) return json({ error: "未登录" }, 401);
-  let body: { roomId?: string };
-  try {
-    body = await request.json();
-  } catch {
-    return json({ error: "请求格式错误" }, 400);
-  }
-  const id = (body.roomId || "").trim().toUpperCase();
-  const row = await env.DB.prepare("SELECT id, type, creator, opponent, status FROM games WHERE id = ?").bind(id).first<{ id: string; type: string; creator: string; opponent: string | null; status: string }>();
-  if (!row) return json({ error: "房间不存在" }, 404);
-  if (row.creator !== user.username) return json({ error: "只有房主可以开下一局" }, 403);
-  const opponent = await currentOpponent(env, id, row.creator);
-  if (!opponent) return json({ error: "还没有对手，先等别人加入" }, 409);
-  // ⚠️ 每局都要重新收费：清掉「已付费」标记 + 结算结果，状态回到 waiting 等对手付款。
-  //    对手付款后（pay-self）才会置 ready，房主才能点开始。
-  await env.DB.prepare(
-    "UPDATE games SET status = 'waiting', board = NULL, turn = NULL, winner = NULL, result = NULL, round_fee_paid = 0 WHERE id = ?"
-  ).bind(id).run();
-  const players = await gamePlayers(env, id);
-  await notifyUsers(env, players.map((p) => p.username),
-    { type: "game-needpay", roomId: id, fee: gameFeeFor(row.type), by: row.creator });
-  return json({ ok: true, needPay: true, fee: gameFeeFor(row.type) });
+// 「再来一局」已彻底关闭（用户明确要求：棋类结束后不能再开下一局）。
+// 想继续下棋必须回聊天页到 SHOP 重新购买房间号（每局重新计费），堵死任何同房间续局/白嫖入口。
+async function handleGameRestart(_request: Request, _env: Env): Promise<Response> {
+  return json({ error: "棋类结束后不能再开下一局，请到 SHOP 重新购买房间号" }, 403);
 }
 
 // 删除房间：房主可删除自己的房间（任意状态，含已结束）

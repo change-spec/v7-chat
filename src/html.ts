@@ -2971,33 +2971,8 @@ export const html = `<!DOCTYPE html>
             // 消消乐：也走结算界面（房主视角）
             cbShowResult(d.winner || '', d.result || '本局结束');
           }
-          // ⚠️ 不再自动闪退：结算界面必须留在房间里，用户才能看到胜败并删除房间。
-          //    用户可点结算面板上的「返回聊天 / 再来一局 / 删除房间」。
-        }
-      } else if (d.type === 'game-needpay') {
-        // 房主要开下一局 → 对手需要重新付费
-        if (currentGame && d.roomId === currentGame.roomId) {
-          setRoomStatus('waiting');
-          if (!currentGame.iAmCreator) {
-            cbNeedPay(d.fee || feeOf(currentGame.type), d.by);
-            appendSys('对方要开下一局，支付 ' + (d.fee || feeOf(currentGame.type)) + ' Credits 后继续');
-          }
-        }
-      } else if (d.type === 'game-restart') {
-        if (currentGame && d.roomId === currentGame.roomId) {
-          var box = document.querySelector('.cb-settle');
-          if (box) box.remove();
-          var wrapEl = document.getElementById('cbWrap');
-          if (wrapEl) wrapEl.classList.remove('settled');
-          if (cb) {
-            cb.over = false; cb.playing = false; cb.sel = null; cb.moves = null;
-            cb.keys = []; cb.lastMove = null;
-            cb.st = cb.G.parse(d.board);
-            cbRender();
-          }
-          cbLastBoard = d.board || '';
-          setRoomStatus('ready');
-          appendSys('房主开始了下一局');
+          // ⚠️ 不再自动闪退：结算界面必须留在房间里，用户才能看到胜败并点「返回聊天」。
+          //    棋类结束后没有「再来一局」：想继续下棋请回聊天页到 SHOP 重新购买房间号。
         }
       } else if (d.type === 'game-deleted') {
         // 房间被房主删除 → 立即退回聊天页
@@ -3255,7 +3230,10 @@ export const html = `<!DOCTYPE html>
   //    对手不能结束本局 —— 那是房主的权限。
 
   // 购买房间号：SHOP（data-shop-buy）与游戏大厅（data-game-buy）共用
+  var _buyingGameRoom = false; // 防连点锁：一次购买未结束前忽略后续点击，避免重复扣费
   async function buyGameRoom(type) {
+    if (_buyingGameRoom) return;
+    _buyingGameRoom = true;
     var errEl = document.getElementById('shopGameErr') || document.getElementById('gameErr');
     if (errEl) errEl.textContent = '';
     try {
@@ -3274,7 +3252,12 @@ export const html = `<!DOCTYPE html>
         appendSys('房间号 ' + r.data.roomId + ' 已创建（花费 ' + r.data.fee + ' Credits）· 把房间号发给好友，人齐了点「开始棋局」');
         if (navigator.clipboard) { try { await navigator.clipboard.writeText(r.data.roomId); } catch (e) {} }
       }
-    } catch (e) { if (errEl) errEl.textContent = '网络错误，请重试'; }
+    } catch (e) {
+      // fetch 层失败≠购买失败：请求可能已到服务端且已扣费建房，只是响应没回来。
+      // 提示用户先核对余额/房间，避免盲目重复点击造成多次扣费。
+      if (errEl) errEl.textContent = '连接异常：房间可能已购买成功，请先查看积分是否减少，不要连续重复点击；若重复扣费请联系管理员退回。';
+      try { await refreshMe && refreshMe(); } catch (e2) {}
+    } finally { _buyingGameRoom = false; }
   }
   Array.prototype.forEach.call(document.querySelectorAll('[data-shop-buy]'), function (btn) {
     btn.addEventListener('click', function () { buyGameRoom(btn.getAttribute('data-shop-buy')); });
@@ -3983,18 +3966,12 @@ export const html = `<!DOCTYPE html>
         sideRow(opponent, (cb.G && cb.G.place ? '白方' : '黑方'), opponentWon) +
       '</div>' +
       '<div class="s-acts">' +
-        (currentGame && currentGame.iAmCreator
-          ? '<button class="btn small" id="cbAgainBtn" type="button">🔄 再来一局</button>' : '') +
         '<button class="btn small" id="cbSettleLeaveBtn" type="button">▸ 返回聊天</button>' +
       '</div>' +
-      '<div class="s-note">房间号 <b>' + escHtml(currentGame ? currentGame.roomId : '') + '</b> 仍然有效 · 可把这个房间号发给下一位对手直接换人对弈' +
-        (currentGame && currentGame.iAmCreator
-          ? '<br>每一局对手都需要重新付费才能开局' : '') +
+      '<div class="s-note">本局已结束 · 想继续下棋请到 SHOP 重新购买房间号（每局重新计费）' +
       '</div>';
     wrap.appendChild(box);
 
-    var again = document.getElementById('cbAgainBtn');
-    if (again) again.addEventListener('click', function () { cbRestart(); });
     var lv = document.getElementById('cbSettleLeaveBtn');
     if (lv) lv.addEventListener('click', function () { leaveRoomAndExit(); });
 
@@ -4007,57 +3984,9 @@ export const html = `<!DOCTYPE html>
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
-  // 再来一局（房主）：重置局面，同一对手继续下
-  // 再来一局：向对手发起下一局的收费请求（对手付款后才能开局）
-  function cbRestart() {
-    if (!currentGame || !currentGame.iAmCreator) return;
-    api('/api/game/restart', { roomId: currentGame.roomId }).then(function (r) {
-      if (!r.ok) { appendSys(r.data.error || '无法开始下一局'); return; }
-      var box = document.querySelector('.cb-settle');
-      if (box) box.remove();
-      var wrapEl = document.getElementById('cbWrap');
-      if (wrapEl) wrapEl.classList.remove('settled');
-      cb.over = false;
-      cb.playing = false;
-      cb.sel = null;
-      cb.moves = null;
-      cb.keys = [];
-      cb.lastMove = null;
-      cbRender();
-      setRoomStatus('waiting');
-      appendSys('已向对手发起下一局 · 等对手支付 ' + (r.data.fee || feeOf(currentGame.type)) +
-        ' Credits 后即可开始（每局都要重新收费）');
-    }).catch(function () { appendSys('网络错误'); });
-  }
-
-  // 对手收到「下一局需付费」请求：弹出确认，付款后房间才能开局
-  function cbNeedPay(fee, by) {
-    var wrap = document.getElementById('cbWrap');
-    if (!wrap) return;
-    var old = wrap.querySelector('.cb-needpay');
-    if (old) old.remove();
-    var box = document.createElement('div');
-    box.className = 'cb-needpay';
-    box.innerHTML =
-      '<div class="np-title">💰 对方要开下一局</div>' +
-      '<div class="np-sub">' + escHtml(String(by || '房主')) + ' 邀请你继续对弈 · 本局需支付 <b>' + fee + ' Credits</b></div>' +
-      '<div class="np-acts">' +
-        '<button class="btn small magenta" id="npPayBtn" type="button">▸ 支付 ' + fee + ' Credits 继续</button>' +
-        '<button class="btn small" id="npNoBtn" type="button">▸ 暂不</button>' +
-      '</div>';
-    wrap.appendChild(box);
-    document.getElementById('npPayBtn').addEventListener('click', function () {
-      box.remove();
-      api('/api/game/pay-self', { roomId: currentGame.roomId }).then(function (r) {
-        if (!r.ok) { appendSys(r.data.error || '支付失败'); return; }
-        appendSys('已支付 ' + fee + ' Credits，等待房主开始');
-      }).catch(function () { appendSys('网络错误'); });
-    });
-    document.getElementById('npNoBtn').addEventListener('click', function () {
-      box.remove();
-      appendSys('已拒绝本局');
-    });
-  }
+  // ⚠️ 「再来一局 / 下一局付费」已彻底移除（用户明确要求：棋类结束后不能再开下一局）。
+  //    想继续下棋 → 返回聊天 → 到 SHOP 重新购买房间号（每局重新计费）。
+  //    cbRestart() / cbNeedPay() 已删除，请勿再引入任何「同房间续局」入口。
 
   // 离开房间并退出：告知服务端释放座位（房主离开 = 房间号立即删除）
   function leaveRoomAndExit() {
