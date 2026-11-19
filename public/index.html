@@ -328,6 +328,50 @@
   .cb-cell .cap { position: absolute; width: 84%; height: 84%; border: 2px solid var(--cyan); border-radius: 50%; opacity: .85; pointer-events: none; }
   .cb-piece { position: relative; z-index: 2; line-height: 1; pointer-events: none; font-weight: 700; }
   /* 亮方/暗方用霓虹青 vs 霓虹紫区分（与全站 cyan/magenta 配色一致，弱光下也一眼可辨） */
+  /* ===== 落子式棋盘（五子棋/围棋）===== */
+  .cb-place.cb-board {
+    background: #d9b779;                     /* 木质棋盘 */
+    border: 2px solid #8a6432;
+    box-shadow: 0 0 30px rgba(255,180,0,.18), inset 0 0 30px rgba(90,50,10,.35);
+    position: relative;
+  }
+  .cb-place .cb-cell {
+    background: transparent;
+    position: relative;
+  }
+  /* 网格线：每格右/下画细线，靠外框补左边与上边 */
+  .cb-place .cb-cell::before {
+    content: ''; position: absolute; right: -1px; top: 0; bottom: -1px;
+    width: 1px; background: rgba(60,35,10,.55); pointer-events: none;
+  }
+  .cb-place .cb-cell::after {
+    content: ''; position: absolute; bottom: -1px; left: 0; right: -1px;
+    height: 1px; background: rgba(60,35,10,.55); pointer-events: none;
+  }
+  .cb-place .cb-cell.star::marker { content: ''; }
+  .cb-place .cb-cell.star > i.star-dot,
+  .cb-place .cb-cell.star::marker { display: none; }
+  /* 星位用内嵌小圆点 */
+  .cb-place .cb-cell.star { box-shadow: inset 0 0 0 99px transparent; }
+  .cb-place .cb-cell.star .st {
+    position: absolute; width: 5px; height: 5px; border-radius: 50%;
+    background: #3c230c; left: 50%; top: 50%; transform: translate(-50%,-50%);
+    pointer-events: none; z-index: 1;
+  }
+  .cb-place .cb-piece.stone-b,
+  .cb-place .cb-piece.stone-w {
+    position: absolute; left: 6%; top: 6%; width: 88%; height: 88%;
+    border-radius: 50%; z-index: 3; pointer-events: none;
+  }
+  .cb-place .cb-piece.stone-b {
+    background: radial-gradient(circle at 35% 30%, #4a4a4a, #0b0b0b 70%);
+    box-shadow: 0 2px 4px rgba(0,0,0,.6), inset 0 1px 2px rgba(255,255,255,.18);
+  }
+  .cb-place .cb-piece.stone-w {
+    background: radial-gradient(circle at 35% 30%, #fff, #d8d8d8 70%);
+    box-shadow: 0 2px 4px rgba(0,0,0,.45), inset 0 -1px 2px rgba(0,0,0,.12);
+  }
+  .cb-place .cb-cell.last::before { box-shadow: 0 0 0 2px var(--amber) inset; }
   .cb-piece.up { color: #eaf6ff; text-shadow: 0 0 11px rgba(0,210,255,.9), 0 1px 2px #000; }
   .cb-piece.dn { color: #d3a6ff; text-shadow: 0 0 11px rgba(190,90,255,.9), 0 1px 2px #000; }
   .cb-xq .cb-piece.up { color: #ff6b6b; text-shadow: 0 0 11px rgba(255,60,60,.85), 0 1px 2px #000; }
@@ -875,6 +919,18 @@
           <button class="btn small wide" data-game-join="xiangqi">输入房间号加入</button>
         </div>
         <div class="lobby-card">
+          <div class="t">⚫ 五子棋</div>
+          <div class="d"><span class="fee" data-fee="gomoku">42</span> Credits / 局 · 15路连五 · 真人对战</div>
+          <button class="btn small magenta wide" data-game-buy="gomoku">购买房间号</button>
+          <button class="btn small wide" data-game-join="gomoku">输入房间号加入</button>
+        </div>
+        <div class="lobby-card">
+          <div class="t">⚪ 围棋</div>
+          <div class="d"><span class="fee" data-fee="go">42</span> Credits / 局 · 19路中国规则 · 真人对战</div>
+          <button class="btn small magenta wide" data-game-buy="go">购买房间号</button>
+          <button class="btn small wide" data-game-join="go">输入房间号加入</button>
+        </div>
+        <div class="lobby-card">
           <div class="t">🍬 消消乐</div>
           <div class="d"><span class="fee" data-fee="match3">50</span> Credits / 局 · 单人连线消除</div>
           <button class="btn small magenta wide" data-game-buy="match3">购买并开始</button>
@@ -907,6 +963,8 @@
           <button class="btn small magenta" data-shop-buy="match3" type="button">🍬 消消乐 · <span class="fee" data-fee="match3">50</span></button>
           <button class="btn small magenta" data-shop-buy="chess" type="button">♟ 国际象棋 · <span class="fee" data-fee="chess">28</span></button>
           <button class="btn small magenta" data-shop-buy="xiangqi" type="button">♞ 中国象棋 · <span class="fee" data-fee="xiangqi">28</span></button>
+          <button class="btn small magenta" data-shop-buy="gomoku" type="button">⚫ 五子棋 · <span class="fee" data-fee="gomoku">42</span></button>
+          <button class="btn small magenta" data-shop-buy="go" type="button">⚪ 围棋 · <span class="fee" data-fee="go">42</span></button>
         </div>
         <div class="err" id="shopGameErr"></div>
       </div>
@@ -1561,7 +1619,7 @@
 </script>
 <script id="gameEngine">
 /* =========================================================================
- * 棋类引擎 · 国际象棋(chess) + 中国象棋(xiangqi)
+ * 棋类引擎 · 国际象棋(chess) + 中国象棋(xiangqi) + 五子棋(gomoku) + 围棋(go·中国规则)
  * 纯逻辑、零 DOM 依赖 —— 浏览器与 Node 单测共用同一份实现。
  * 局面序列化为 FEN 文本：国际象棋用标准 FEN，中国象棋用同构 FEN。
  * 服务端存 games.board 字段；走子由前端引擎判定（规则权威在引擎内），
@@ -2043,6 +2101,274 @@
   }
 
   /* ---------------- 对外接口 ---------------- */
+  /* =========================================================================
+   * 五子棋：棋盘 15x15，索引 = row*15+col，黑先（side 0=黑/房主，1=白/对手）
+   *   棋子 'X' = 黑，'O' = 白，'.' = 空。
+   *   规则：轮流落子，率先在横/竖/两条斜线上连成 5 子（含）者胜。
+   *   不设禁手（用户未要求；自由五子棋，黑先）。
+   *   序列化：FEN 的前两段 = 棋盘行（X/O/./数字压缩）+ ' b'/' w'。
+   * ======================================================================= */
+  var G5_N = 15;
+  function g5Idx(r, c) { return r * G5_N + c; }
+  function g5Row(i) { return Math.floor(i / G5_N); }
+  function g5Col(i) { return i % G5_N; }
+  function g5On(r, c) { return r >= 0 && r < G5_N && c >= 0 && c < G5_N; }
+  function g5Start() {
+    var b = new Array(G5_N * G5_N).fill('.');
+    return { b: b, t: 0, passes: 0 };
+  }
+  function g5Parse(fen) {
+    var b = new Array(G5_N * G5_N).fill('.');
+    var p = String(fen || '').trim().split(/\s+/);
+    if (p[0]) {
+      var rows = p[0].split('/');
+      for (var r = 0; r < Math.min(rows.length, G5_N); r++) {
+        var c = 0, s = rows[r];
+        for (var k = 0; k < s.length && c < G5_N; k++) {
+          var ch = s[k];
+          if (ch >= '0' && ch <= '9') {          // 支持两位数字（15 是棋盘宽度）
+            var num = 0;
+            while (k < s.length && s[k] >= '0' && s[k] <= '9') { num = num * 10 + Number(s[k]); k++; }
+            k--; c += num;
+          } else { b[g5Idx(r, c)] = ch; c++; }
+        }
+      }
+    }
+    return { b: b, t: p[1] === 'w' ? 1 : 0, passes: 0 };
+  }
+  function g5ToFen(st) {
+    var rows = [];
+    for (var r = 0; r < G5_N; r++) {
+      var s = '', run = 0;
+      for (var c = 0; c < G5_N; c++) {
+        var ch = st.b[g5Idx(r, c)];
+        if (ch === '.') { run++; }
+        else { if (run) { s += run; run = 0; } s += ch; }
+      }
+      if (run) s += run;
+      rows.push(s);
+    }
+    return rows.join('/') + ' ' + (st.t === 1 ? 'w' : 'b');
+  }
+  // 走法生成：所有空格都是合法落点
+  function g5Moves(st) {
+    var out = [];
+    for (var i = 0; i < st.b.length; i++) if (st.b[i] === '.') out.push({ from: -1, to: i, put: st.t });
+    return out;
+  }
+  function g5Apply(st, mv) {
+    var ns = { b: st.b.slice(), t: opp(st.t), passes: 0 };
+    // ⚠️ put 是 side 数字（0=黑/1=白），不是棋子字符；曾直接存数字导致棋盘出现 0。
+    var sidePut = mv.put !== undefined ? mv.put : st.t;
+    ns.b[mv.to] = sidePut === 0 ? 'X' : 'O';
+    return ns;
+  }
+  // 从 (r,c) 沿方向数同色连续子
+  function g5Line(b, r, c, dr, dc, ch) {
+    var n = 0, rr = r + dr, cc = c + dc;
+    while (g5On(rr, cc) && b[g5Idx(rr, cc)] === ch) { n++; rr += dr; cc += dc; }
+    return n;
+  }
+  function g5WinAt(b, i) {
+    var ch = b[i];
+    if (ch !== 'X' && ch !== 'O') return false;
+    var r = g5Row(i), c = g5Col(i);
+    var dirs = [[0,1],[1,0],[1,1],[1,-1]];
+    for (var d = 0; d < dirs.length; d++) {
+      var dr = dirs[d][0], dc = dirs[d][1];
+      if (1 + g5Line(b,r,c,dr,dc,ch) + g5Line(b,r,c,-dr,-dc,ch) >= 5) return true;
+    }
+    return false;
+  }
+  function g5Status(st) {
+    // 检查最后一手（遍历所有棋子反推胜方：只要任一方连五即胜）
+    for (var i = 0; i < st.b.length; i++) {
+      if (g5WinAt(st.b, i)) {
+        var w = st.b[i] === 'X' ? 0 : 1;
+        return { over: true, winner: w, result: w === 0 ? '黑方胜' : '白方胜', reason: '连成五子' };
+      }
+    }
+    var empty = st.b.some(function (x) { return x === '.'; });
+    if (!empty) return { over: true, winner: 'draw', result: '和棋', reason: '棋盘已满' };
+    return { over: false, winner: null, result: '', reason: '' };
+  }
+
+  /* =========================================================================
+   * 围棋：棋盘 19x19，索引 = row*19+col
+   *   棋子 'X' = 黑（房主先手），'O' = 白（对手），'.' = 空。
+   *   规则：落子提子（无气者被提）、劫（简单劫：禁止立即回提形成重复局面）、
+   *         双方连续 pass 终局。
+   *   计分：**中国规则数子法** —— 子 + 围空（黑空只算黑围、白空只算白围），
+   *         黑贴 3¾ 子（7.5 目）。数子结果 = 黑(子+空) - 180.5 > 0 则黑胜。
+   *   FEN：棋盘段 + ' b'/' w' + ' ' + 上一手位置索引（劫用，-1 表示无）。
+   * ======================================================================= */
+  var GO_N = 19;
+  var GO_KOMI = 7.5; // 中国规则贴目（相当于 3¾ 子）
+  function goIdx(r, c) { return r * GO_N + c; }
+  function goRow(i) { return Math.floor(i / GO_N); }
+  function goCol(i) { return i % GO_N; }
+  function goOn(r, c) { return r >= 0 && r < GO_N && c >= 0 && c < GO_N; }
+  var GO_DIR = [[-1,0],[1,0],[0,-1],[0,1]];
+  function goStart() { return { b: new Array(GO_N * GO_N).fill('.'), t: 0, last: -1, passes: 0 }; }
+  function goParse(fen) {
+    var b = new Array(GO_N * GO_N).fill('.');
+    var p = String(fen || '').trim().split(/\s+/);
+    if (p[0]) {
+      var rows = p[0].split('/');
+      for (var r = 0; r < Math.min(rows.length, GO_N); r++) {
+        var c = 0, s = rows[r];
+        for (var k = 0; k < s.length && c < GO_N; k++) {
+          var ch = s[k];
+          if (ch >= '0' && ch <= '9') {          // 支持两位数字（19 是棋盘宽度）
+            var num = 0;
+            while (k < s.length && s[k] >= '0' && s[k] <= '9') { num = num * 10 + Number(s[k]); k++; }
+            k--; c += num;
+          } else { b[goIdx(r, c)] = ch; c++; }
+        }
+      }
+    }
+    // 第四字段 = 连续 pass 次数（终局判定依赖它，必须随 FEN 往返）
+    return {
+      b: b, t: p[1] === 'w' ? 1 : 0,
+      last: p[2] && p[2] !== '-' ? Number(p[2]) : -1,
+      passes: p[3] && p[3] !== '-' ? Number(p[3]) : 0
+    };
+  }
+  function goToFen(st) {
+    var rows = [];
+    for (var r = 0; r < GO_N; r++) {
+      var s = '', run = 0;
+      for (var c = 0; c < GO_N; c++) {
+        var ch = st.b[goIdx(r, c)];
+        if (ch === '.') { run++; }
+        else { if (run) { s += run; run = 0; } s += ch; }
+      }
+      if (run) s += run;
+      rows.push(s);
+    }
+    return rows.join('/') + ' ' + (st.t === 1 ? 'w' : 'b') + ' ' +
+      (st.last === undefined || st.last < 0 ? '-' : st.last) + ' ' + (st.passes || 0);
+  }
+  // 某棋子所在块的棋子集合与气集合
+  function goGroup(b, idx) {
+    var ch = b[idx];
+    if (ch === '.') return null;
+    var stones = [], libs = {}, seen = {}, stack = [idx];
+    while (stack.length) {
+      var p = stack.pop();
+      if (seen[p]) continue;
+      seen[p] = 1; stones.push(p);
+      var r = goRow(p), c = goCol(p);
+      for (var d = 0; d < 4; d++) {
+        var nr = r + GO_DIR[d][0], nc = c + GO_DIR[d][1];
+        if (!goOn(nr, nc)) continue;
+        var q = goIdx(nr, nc);
+        if (b[q] === '.') libs[q] = 1;
+        else if (b[q] === ch && !seen[q]) stack.push(q);
+      }
+    }
+    return { stones: stones, libs: Object.keys(libs).map(Number) };
+  }
+  function goKey(b) { return b.join(''); }
+  // 试下一手：返回新局面（含提子），不合法返回 null
+  function goTry(st, idx, side) {
+    if (idx < 0 || idx >= st.b.length || st.b[idx] !== '.') return null;
+    var b = st.b.slice();
+    b[idx] = side === 0 ? 'X' : 'O';
+    var foe = side === 0 ? 'O' : 'X';
+    var captured = 0;
+    // 提掉四周无气的敌块
+    var r = goRow(idx), c = goCol(idx);
+    for (var d = 0; d < 4; d++) {
+      var nr = r + GO_DIR[d][0], nc = c + GO_DIR[d][1];
+      if (!goOn(nr, nc)) continue;
+      var q = goIdx(nr, nc);
+      if (b[q] !== foe) continue;
+      var g = goGroup(b, q);
+      if (g && g.libs.length === 0) {
+        for (var i = 0; i < g.stones.length; i++) { b[g.stones[i]] = '.'; captured++; }
+      }
+    }
+    // 自杀手：自己无气且没提子 → 非法
+    var mineG = goGroup(b, idx);
+    if (mineG.libs.length === 0 && captured === 0) return null;
+    // 简单劫：若提了恰好一子，且新局面等于上一手的局面 → 立即回提，禁止
+    if (captured === 1 && st.last >= 0 && goKey(b) === goKey(st.b)) return null;
+    return { b: b, captured: captured };
+  }
+  function goMoves(st) {
+    var out = [], side = st.t;
+    for (var i = 0; i < st.b.length; i++) {
+      if (st.b[i] !== '.') continue;
+      var t = goTry(st, i, side);
+      if (t) out.push({ from: -1, to: i, put: side });
+    }
+    // pass 作为一个合法走法（to = -2）
+    out.push({ from: -1, to: -2, put: side, pass: true });
+    return out;
+  }
+  function goApply(st, mv) {
+    if (mv.pass) {
+      return { b: st.b.slice(), t: opp(st.t), last: -1, passes: (st.passes || 0) + 1 };
+    }
+    var t = goTry(st, mv.to, mv.put !== undefined ? mv.put : st.t);
+    if (!t) return st;
+    return { b: t.b, t: opp(st.t), last: mv.to, passes: 0 };
+  }
+  // 中国规则数子：黑 (子 + 黑围空) - 贴目；白 (子 + 白围空) + 贴目。
+  // 围空判定：空点连通块只邻接一种颜色 → 算该色空；同时邻接双方（公气）
+  // 或完全不邻接棋子 → 不计。注意这是**终局**计分，要求双方已把地盘围死；
+  // 非终局局面（如只有一方落子）大片空会被算给唯一邻接的颜色，属预期。
+  // 死子不额外清理（娱乐对局简化版）：终局双方 pass 时活子仍在盘上。
+  function goScore(st) {
+    var black = 0, white = 0;
+    var seen = {};
+    for (var i = 0; i < st.b.length; i++) {
+      var ch = st.b[i];
+      if (ch === 'X') { black++; continue; }
+      if (ch === 'O') { white++; continue; }
+      if (seen[i]) continue;
+      // 空点连通块：整块所有点邻接到的颜色集合
+      var stack = [i], libs = [], touch = {};
+      seen[i] = 1;
+      while (stack.length) {
+        var p = stack.pop(); libs.push(p);
+        var r = goRow(p), c = goCol(p);
+        for (var d = 0; d < 4; d++) {
+          var nr = r + GO_DIR[d][0], nc = c + GO_DIR[d][1];
+          if (!goOn(nr, nc)) continue;
+          var q = goIdx(nr, nc), v = st.b[q];
+          if (v === '.') { if (!seen[q]) { seen[q] = 1; stack.push(q); } }
+          else touch[v] = 1;
+        }
+      }
+      // 只有整块空只被一种颜色包围，才算该色的空
+      if (touch.X && !touch.O) black += libs.length;
+      else if (touch.O && !touch.X) white += libs.length;
+      // 双方都邻接（公气）或都不邻接 → 不计
+    }
+    // 中国规则贴目 7.5 目（=3¾子）
+    var blackTotal = black;
+    var whiteTotal = white + GO_KOMI;
+    var diff = blackTotal - whiteTotal;
+    if (Math.abs(diff) < 0.01) return { winner: 'draw', black: blackTotal, white: whiteTotal, margin: 0 };
+    return {
+      winner: diff > 0 ? 0 : 1,
+      black: blackTotal, white: whiteTotal,
+      margin: Math.abs(diff)
+    };
+  }
+  function goStatus(st) {
+    if ((st.passes || 0) < 2) return { over: false, winner: null, result: '', reason: '' };
+    var s = goScore(st);
+    if (s.winner === 'draw') return { over: true, winner: 'draw', result: '和棋', reason: '中国规则数子·贴目后持平' };
+    return {
+      over: true, winner: s.winner,
+      result: s.winner === 0 ? '黑方胜' : '白方胜',
+      reason: '中国规则数子 · ' + s.margin + ' 目' + (s.winner === 0 ? '（黑贴 7.5 目后）' : '（含黑贴 7.5 目）')
+    };
+  }
+
   var GE = {
     chess: {
       name: '国际象棋', rows: 8, cols: 8, start: C_START,
@@ -2061,7 +2387,26 @@
                k: '将', a: '士', b: '象', n: '马', r: '车', c: '炮', p: '卒' }
     }
   };
-  GE.for = function (type) { return type === 'xiangqi' ? GE.xiangqi : GE.chess; };
+  GE.gomoku = {
+    name: '五子棋', rows: 15, cols: 15, start: '',
+    parse: g5Parse, toFen: g5ToFen, moves: g5Moves, legal: g5Moves, apply: g5Apply,
+    status: g5Status, idx: g5Idx, row: g5Row, col: g5Col,
+    place: true,
+    glyph: { X: '●', O: '○' }
+  };
+  GE.go = {
+    name: '围棋', rows: 19, cols: 19, start: '',
+    parse: goParse, toFen: goToFen, moves: goMoves, legal: goMoves, apply: goApply,
+    status: goStatus, score: goScore, idx: goIdx, row: goRow, col: goCol,
+    place: true, passable: true,
+    glyph: { X: '●', O: '○' }
+  };
+  GE.for = function (type) {
+    if (type === 'xiangqi') return GE.xiangqi;
+    if (type === 'gomoku') return GE.gomoku;
+    if (type === 'go') return GE.go;
+    return GE.chess;
+  };
   root.GameEngine = GE;
 })(typeof window !== 'undefined' ? window : globalThis);
 </script>
@@ -2411,7 +2756,7 @@
   // ===== 游戏费率（服务端为唯一真相源）=====
   // ⚠️ 价格文案不要再硬编码：统一从 GET /api/game/fees 拉取，
   //    保证「界面显示的价」永远等于「实际扣的价」。
-  var GAME_FEES = { match3: 50, chess: 28, xiangqi: 28 };
+  var GAME_FEES = { match3: 50, chess: 28, xiangqi: 28, gomoku: 42, go: 42 };
 
   function feeOf(type) {
     var f = GAME_FEES[type];
@@ -2865,7 +3210,13 @@
   function showGamePanel(which) {
     showOnly(which === 'lobby' ? gameLobby : which === 'pay' ? gamePayPanel : which === 'room' ? gameRoomPanel : chatPanel);
   }
-  function gameTypeName(t) { return t === 'xiangqi' ? '中国象棋' : t === 'match3' ? '消消乐' : '国际象棋'; }
+  function gameTypeName(t) {
+    if (t === 'xiangqi') return '中国象棋';
+    if (t === 'gomoku') return '五子棋';
+    if (t === 'go') return '围棋（中国规则）';
+    if (t === 'match3') return '消消乐';
+    return '国际象棋';
+  }
   function refreshMe() {
     api('/api/me').then(function (r) {
       if (r.ok) {
@@ -3346,7 +3697,9 @@
 
   function cbSideLabel(side) {
     if (!cb) return '';
-    return cb.type === 'xiangqi' ? (side === 0 ? '红方' : '黑方') : (side === 0 ? '白方' : '黑方');
+    if (cb.type === 'xiangqi') return side === 0 ? '红方' : '黑方';
+    if (cb.G && cb.G.place) return side === 0 ? '黑方' : '白方';
+    return side === 0 ? '白方' : '黑方';
   }
   function cbMySide() {
     if (!currentGame) return 0;
@@ -3389,6 +3742,7 @@
           '<div class="cb-tip" id="cbTip"></div>' +
           '<div class="tool-row" style="justify-content:center;margin:0">' +
             '<button class="btn small" id="cbFlipBtn" type="button">🔄 翻转棋盘</button>' +
+            '<button class="btn small hidden" id="cbPassBtn" type="button">⏭ 停一手 (Pass)</button>' +
             '<button class="btn small magenta" id="cbGiveUpBtn" type="button">🏳️ 认输</button>' +
           '</div>' +
         '</div>';
@@ -3399,10 +3753,20 @@
       document.getElementById('cbGiveUpBtn').addEventListener('click', function () {
         cbGiveUp();
       });
+      document.getElementById('cbPassBtn').addEventListener('click', function () {
+        if (!cb || cb.over || !cb.playing || cb.st.t !== cbMySide()) return;
+        cbDoMove({ from: -1, to: -2, pass: true, put: cbMySide() });
+      });
     }
     var board = document.getElementById('cbBoard');
-    board.className = 'cb-board ' + (cb.type === 'xiangqi' ? 'cb-xq' : 'cb-chess');
+    board.className = 'cb-board ' + (G.place ? 'cb-place' : (cb.type === 'xiangqi' ? 'cb-xq' : 'cb-chess'));
     board.style.gridTemplateColumns = 'repeat(' + G.cols + ', 1fr)';
+    if (G.place) {
+      // 落子式棋盘：用固定像素，19 路也能看清；横向可滚动
+      var cellPx = G.cols >= 19 ? 26 : (G.cols >= 15 ? 30 : 40);
+      board.style.width = (G.cols * cellPx) + 'px';
+      board.style.gridTemplateColumns = 'repeat(' + G.cols + ', ' + cellPx + 'px)';
+    } else { board.style.width = ''; }
     board.innerHTML = '';
     cb.view = cbBuildView();
     var targets = {};
@@ -3423,15 +3787,28 @@
         mk.className = targets[cell.idx].cap ? 'cap' : 'dot';
         el.appendChild(mk);
       }
+      if (G.place) {
+        // 落子式：棋盘线由 CSS 背景画，格子只放棋子；星位加小点
+        el.classList.remove('light', 'dark');
+        if ((G.rows === 15 && [[3,3],[3,11],[7,7],[11,3],[11,11]].some(function(q){return q[0]===cell.r&&q[1]===cell.c;})) ||
+            (G.rows === 19 && [[3,3],[3,9],[3,15],[9,3],[9,9],[9,15],[15,3],[15,9],[15,15]].some(function(q){return q[0]===cell.r&&q[1]===cell.c;}))) {
+          el.classList.add('star');
+          var sd = document.createElement('span');
+          sd.className = 'st';
+          el.appendChild(sd);
+        }
+      }
       if (cell.piece !== '.') {
         var p = document.createElement('span');
-        p.className = 'cb-piece ' + (cbIsMine(cell.piece) ? 'up' : 'dn');
-        p.textContent = G.glyph[cell.piece] || cell.piece;
+        p.className = 'cb-piece ' + (G.place ? (cell.piece === 'X' ? 'stone-b' : 'stone-w') : (cbIsMine(cell.piece) ? 'up' : 'dn'));
+        p.textContent = G.place ? '' : (G.glyph[cell.piece] || cell.piece);
         el.appendChild(p);
       }
       (function (ii) { el.addEventListener('click', function () { cbClick(ii); }); })(i);
       board.appendChild(el);
     }
+    var passBtn = document.getElementById('cbPassBtn');
+    if (passBtn) passBtn.classList.toggle('hidden', !(cb.G && cb.G.passable));
     cbPaintOverlay();
     cbUpdateBar();
   }
@@ -3500,6 +3877,18 @@
     var G = cb.G;
     if (!cb.playing) { appendSys('棋局还没开始，等房主开局'); return; }
     if (cb.st.t !== cbMySide()) { appendSys('还没轮到你走'); return; }
+    // 落子式棋类（五子棋/围棋）：点空位直接落子，没有「选子→目标」两步
+    if (G.place) {
+      if (cell.piece !== '.') return;
+      var pm = { from: -1, to: cell.idx, put: cbMySide() };
+      if (G.passable) {
+        // 围棋用 goTry 的合法性由 apply 保证；非法（自杀/劫）时 apply 会返回原局面
+        var after = G.apply(cb.st, pm);
+        if (after === cb.st) { appendSys('这里不能落子（无气或劫）'); return; }
+      }
+      cbDoMove(pm);
+      return;
+    }
     if (cb.sel !== null && cb.moves) {
       var mv = null;
       for (var k = 0; k < cb.moves.length; k++) {
@@ -3517,7 +3906,7 @@
   function cbDoMove(mv) {
     var G = cb.G;
     // 升变默认升为后（引擎生成 4 种变体，取第一个即后）
-    if (!mv.promo) {
+    if (!mv.promo && mv.from >= 0) {
       var pc = cb.st.b[mv.from];
       if (G.rows === 8 && pc.toUpperCase() === 'P') {
         var lastRow = cbMySide() === 0 ? 0 : 7;
@@ -3590,8 +3979,8 @@
       '<div class="s-title">' + title + '</div>' +
       '<div class="s-reason">' + escHtml(String(reason || '棋局结束')) + '</div>' +
       '<div class="s-players">' +
-        sideRow(creator, cb.type === 'xiangqi' ? '红方 · 房主' : '白方 · 房主', creatorWon) +
-        sideRow(opponent, cb.type === 'xiangqi' ? '黑方' : '黑方', opponentWon) +
+        sideRow(creator, (cb.G && cb.G.place ? '黑方 · 房主' : (cb.type === 'xiangqi' ? '红方 · 房主' : '白方 · 房主')), creatorWon) +
+        sideRow(opponent, (cb.G && cb.G.place ? '白方' : '黑方'), opponentWon) +
       '</div>' +
       '<div class="s-acts">' +
         (currentGame && currentGame.iAmCreator
@@ -3781,7 +4170,7 @@
     var G = GE.for(type);
     cb = {
       type: type, roomId: roomId, G: G,
-      st: G.parse(G.start),
+      st: G.parse(G.start || ''),
       sel: null, moves: null,
       mySide: cbMySide(),
       over: false, keys: [], lastMove: null, view: null, playing: false

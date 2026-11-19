@@ -1448,7 +1448,7 @@ function freeSeat(players: Array<{ username: string; seat: number }>): number {
 // 游戏费率（单位 Credits）：消消乐单人局 50；国际象棋 / 中国象棋 每局 28。
 // ⚠️ 这是**唯一真相源**：前端展示价格通过 GET /api/game/fees 拉取同一份数据，
 //    不要再在前端硬编码价格文案（曾因硬编码导致「文案 5 实际扣 5」两处漂移）。
-const GAME_FEES: Record<string, number> = { match3: 50, chess: 28, xiangqi: 28 };
+const GAME_FEES: Record<string, number> = { match3: 50, chess: 28, xiangqi: 28, gomoku: 42, go: 42 };
 const GAME_FEE_DEFAULT = 28;
 
 // 按游戏类型取费率（消消乐 / 国际象棋 / 中国象棋）
@@ -1762,6 +1762,8 @@ async function handleFileQuote(request: Request, env: Env): Promise<Response> {
 
 function gameTypeName(type: string): string {
   if (type === "xiangqi") return "中国象棋";
+  if (type === "gomoku") return "五子棋";
+  if (type === "go") return "围棋（中国规则）";
   if (type === "match3") return "消消乐";
   return "国际象棋";
 }
@@ -3261,7 +3263,7 @@ async function handleShopBuy(request: Request, env: Env): Promise<Response> {
     return json({ error: "请求格式错误" }, 400);
   }
   const type = (body.type || "").trim();
-  if (type !== "match3" && type !== "chess" && type !== "xiangqi") {
+  if (type !== "match3" && type !== "chess" && type !== "xiangqi" && type !== "gomoku" && type !== "go") {
     return json({ error: "未知的游戏类型" }, 400);
   }
   const fee = gameFeeFor(type);
@@ -3469,9 +3471,11 @@ async function handleGameStart(request: Request, env: Env): Promise<Response> {
     return json({ error: "对手尚未支付本局费用，请先让对手付款" }, 409);
   }
   // 写入初始局面：房主执白（国际象棋）/ 红（中国象棋）
-  const startFen = row.type === "xiangqi"
-    ? "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR r"
-    : "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+  const startFen = row.type === "gomoku" || row.type === "go"
+    ? ""   // 五子棋/围棋：空盘（引擎 parse('') 即空盘）
+    : (row.type === "xiangqi"
+      ? "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR r"
+      : "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
   await env.DB.prepare("UPDATE games SET status = 'playing', board = ?, turn = ?, winner = NULL, result = NULL WHERE id = ?")
     .bind(startFen, row.creator, id).run();
   const players = await gamePlayers(env, id);
