@@ -726,6 +726,8 @@
   .fl-dot { position:absolute; width:3.6%; height:3.6%; border-radius:50%; transform:translate(-50%,-50%);
     background:#eaf6ee; box-shadow:0 0 8px rgba(234,246,238,.75); }
   .fl-dot.hd { width:4.4%; height:4.4%; border:1px solid currentColor; }
+  .fl-arrow { position:absolute; transform:translate(-50%,-50%); font-size:clamp(11px,2.4vw,17px);
+    line-height:1; font-weight:500; text-shadow:0 0 8px currentColor; z-index:2; }
   /* 中心太阳 */
   .fl-sun { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:13%; height:13%;
     border-radius:50%; background:radial-gradient(circle,#ffe680,#ff9d00 60%,#b35c00);
@@ -2536,22 +2538,25 @@
   var N_MAIN = PATH.length; // 52
   var HOME_LEN = 6;
   var GOAL = N_MAIN + HOME_LEN; // 58
-  // 每格颜色 = index%4 → 0红 1黄 2绿 3蓝（四色循环，跳跃看颜色）
-  function cellColor(i){ return i % 4; }
-  // seat 0红 1黄 2绿 3蓝 —— 起飞点间隔13，start%4 互不相同(0/1/2/3)，跳格不串色
+  // 格子颜色：index%4 的四色循环 → 对应 seat。
+  // 起飞点 red39/黄0/绿26/蓝13，start%4=3/0/2/1；令颜色映射后跳格恰好落在自己色格。
+  // CELL_SEAT[index%4] = 该颜色格所属玩家：0(黄) 1(蓝) 2(绿) 3(红)
+  var CELL_SEAT = [1, 3, 2, 0];
+  function cellColor(i){ return CELL_SEAT[i % 4]; } // 返回该格颜色对应的 seat
+  // seat 0红1黄2绿3蓝：机场左上蓝/右上绿/左下黄/右下红，各自从本侧通道起飞，绝不串到对侧。
   var COLORS = [
-    { key:'red',    name:'红', hex:'#ff3b5c', start:0,
-      home:[[7,13],[7,12],[7,11],[7,10],[7,9],[7,8]],
-      base:[[10,10],[12,10],[10,12],[12,12]] },
-    { key:'yellow', name:'黄', hex:'#ffcf3d', start:13,
-      home:[[1,7],[2,7],[3,7],[4,7],[5,7],[6,7]],
-      base:[[2,10],[4,10],[2,12],[4,12]] },
-    { key:'green',  name:'绿', hex:'#25e07a', start:26,
-      home:[[7,1],[7,2],[7,3],[7,4],[7,5],[7,6]],
-      base:[[10,2],[12,2],[10,4],[12,4]] },
-    { key:'blue',   name:'蓝', hex:'#33aaff', start:39,
+    { key:'red',    name:'红', hex:'#ff3b5c', start:39,  // 右下机场 → 右通道
       home:[[13,7],[12,7],[11,7],[10,7],[9,7],[8,7]],
-      base:[[2,2],[4,2],[2,4],[4,4]] }
+      base:[[11,11],[12.6,11],[11,12.6],[12.6,12.6]] },
+    { key:'yellow', name:'黄', hex:'#ffcf3d', start:0,   // 左下机场 → 下通道
+      home:[[7,13],[7,12],[7,11],[7,10],[7,9],[7,8]],
+      base:[[2.4,11],[4,11],[2.4,12.6],[4,12.6]] },
+    { key:'green',  name:'绿', hex:'#25e07a', start:26,  // 右上机场 → 上通道
+      home:[[7,1],[7,2],[7,3],[7,4],[7,5],[7,6]],
+      base:[[11,2.4],[12.6,2.4],[11,4],[12.6,4]] },
+    { key:'blue',   name:'蓝', hex:'#33aaff', start:13,  // 左上机场 → 左通道（修复起飞串到右侧的bug）
+      home:[[1,7],[2,7],[3,7],[4,7],[5,7],[6,7]],
+      base:[[2.4,2.4],[4,2.4],[2.4,4],[4,4]] }
   ];
   function newState(n) {
     n = Math.max(1,Math.min(4,n|0));
@@ -3582,40 +3587,52 @@
     var grid = document.createElement('div'); grid.className = 'fl-grid';
     board.appendChild(grid);
 
-    // ② 十字归航道底衬（浅色带）+ 白色圆点
+    // ② 飞行线（归航道）：四条彩色通道 + 白色圆点 + 指向中心的箭头。
+    //    上=绿(seat2) 右=红(seat0) 下=黄(seat1) 左=蓝(seat3)，与各自起飞侧一致。
     var yards = [
-      {x:7,y:1,w:1.4,h:6, seat:2},   // 上（绿）
-      {x:7,y:13,w:1.4,h:6, seat:0},  // 下（红）
-      {x:1,y:7,w:6,h:1.4, seat:1},   // 左（黄）
-      {x:13,y:7,w:6,h:1.4, seat:3}   // 右（蓝）
+      {x:7,y:3, w:1.2,h:5,   seat:2, arrow:'▼'}, // 上通道→中心
+      {x:11,y:7,w:5,  h:1.2, seat:0, arrow:'◀'}, // 右通道→中心
+      {x:7,y:11,w:1.2,h:5,   seat:1, arrow:'▲'}, // 下通道→中心
+      {x:3,y:7, w:5,  h:1.2, seat:3, arrow:'▶'}  // 左通道→中心
     ];
     yards.forEach(function (yd) {
+      var col = FE.COLORS[yd.seat];
       var band = box(yd.x, yd.y, yd.w, yd.h);
-      band.className = 'fl-yard'; board.appendChild(band);
+      band.className = 'fl-yard';
+      band.style.background = rgba(col.hex, .22); // 飞行线用本色淡染
+      board.appendChild(band);
+      // 箭头放在通道靠中心一端
+      var ar = document.createElement('div');
+      ar.className = 'fl-arrow';
+      ar.style.color = col.hex;
+      if (yd.arrow==='▼' || yd.arrow==='▲') { ar.style.left = pct(7); ar.style.top = (yd.arrow==='▼'?'27%':'73%'); }
+      else { ar.style.left = (yd.arrow==='◀'?'73%':'27%'); ar.style.top = pct(7); }
+      ar.textContent = yd.arrow;
+      board.appendChild(ar);
     });
     FE.COLORS.forEach(function (col, seat) {
       col.home.forEach(function (h, idx) {
         var dot = document.createElement('div');
         dot.className = 'fl-dot' + (idx === col.home.length - 1 ? ' hd' : '');
         dot.style.left = pct(h[0]); dot.style.top = pct(h[1]);
-        dot.style.color = col.hex; // 终点圆点带自己色边
+        dot.style.color = col.hex;
         board.appendChild(dot);
       });
     });
 
-    // ③ 四角机场大色块 + 4 个停机位（机库按各色，主题霓虹化）
+    // ③ 四角机场：够用的紧凑小机库（3.6×3.6）+ 4 个圆形停机位
     var HANGARS = [
-      {x:2, y:2,  seat:3},  // 左上 蓝
-      {x:12,y:2,  seat:2},  // 右上 绿
-      {x:2, y:12, seat:1},  // 左下 黄
-      {x:12,y:12, seat:0}   // 右下 红
+      {x:3.2,y:3.2, seat:3},  // 左上 蓝
+      {x:11.8,y:3.2,seat:2},  // 右上 绿
+      {x:3.2,y:11.8,seat:1},  // 左下 黄
+      {x:11.8,y:11.8,seat:0}  // 右下 红
     ];
     HANGARS.forEach(function (hg) {
       var col = FE.COLORS[hg.seat];
-      var hb = box(hg.x, hg.y, 5, 5);
+      var hb = box(hg.x, hg.y, 3.8, 3.8);
       hb.className = 'fl-hangar';
       hb.style.color = col.hex;
-      hb.style.background = rgba(col.hex, .16);
+      hb.style.background = rgba(col.hex, .14);
       board.appendChild(hb);
       col.base.forEach(function (b) {
         var pad = document.createElement('div');

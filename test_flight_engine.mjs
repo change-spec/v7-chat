@@ -35,18 +35,19 @@ console.log("=== 路径 / 颜色验证 ===");
     if (Math.abs(before[0] - home0[0]) + Math.abs(before[1] - home0[1]) !== 1) smooth = false;
   });
   ok(smooth, "四归航道入口与主轨道平滑衔接");
-  ok(COLORS.map(c => c.start).join(",") === "0,13,26,39", "四起飞点间隔13");
-  const mods = COLORS.map(c => c.start % 4);
-  ok(new Set(mods).size === 4, "四起飞点颜色不重合(0/1/2/3)");
-  // 跳格颜色一致：progress%4==0 的格子色 == 该玩家起飞色
+  ok(COLORS.map(c => c.start).join(",") === "39,0,26,13", "起飞点:红右/黄下/绿上/蓝左");
+  const st = [0,1,2,3].map(s=>absCell(s,0)); // 红黄绿蓝起点格
+  ok(st[3][0]<=6 && st[2][1]<=6 && st[0][0]>=8 && st[1][1]>=8,
+     "四色从本侧起飞(蓝左/绿上/红右/黄下)");
+  // 跳格颜色一致：progress%4==0 的格子颜色(seat) == 自己 seat
   let colorOk = true;
   COLORS.forEach((c, seat) => {
     for (let p = 4; p < N_MAIN; p += 4) {
       const cellIdx = (c.start + p) % N_MAIN;
-      if (cellColor(cellIdx) !== c.start % 4) { colorOk = false; break; }
+      if (cellColor(cellIdx) !== seat) { colorOk = false; break; }
     }
   });
-  ok(colorOk, "每4格跳格颜色=自己起飞色(跳跃有据可查)");
+  ok(colorOk, "每4格跳格颜色=自己色(跳跃有据可查)");
 }
 
 console.log("=== 规则自测 ===");
