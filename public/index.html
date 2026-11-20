@@ -712,20 +712,30 @@
   .fl-pname { color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:96px; }
   .fl-pseat { color:var(--dim); font-size:10px; }
   .fl-stage { display:flex; justify-content:center; padding:8px 0; }
-  .fl-board { position:relative; width:min(94vw,600px); aspect-ratio:1/1; background:#0d2418;
+  .fl-board { position:relative; width:min(94vw,600px); aspect-ratio:1/1; background:#123a26;
     border:3px solid #ff2e97; border-radius:20px;
     box-shadow:0 0 28px rgba(255,46,151,.45), inset 0 0 50px rgba(0,0,0,.65); overflow:hidden; }
   .fl-grid { position:absolute; inset:0; display:grid; grid-template-columns:repeat(15,1fr); grid-template-rows:repeat(15,1fr); }
   .fl-cell { position:relative; }
   /* 外圈方格环道：宽大方块，四色（box() 已定位尺寸，不再 margin） */
-  .fl-cell.track { border-radius:14%; background:currentColor; transform:scale(.88); z-index:1;
+  .fl-cell.track { border-radius:16%; background:currentColor; transform:scale(.74); z-index:1;
     border:1px solid rgba(255,255,255,.22); box-shadow:inset 0 0 5px rgba(255,255,255,.25), 0 0 4px currentColor; }
   .fl-cell.start { border:2px solid #fff; box-shadow:0 0 14px currentColor, inset 0 0 8px rgba(255,255,255,.5); }
-  /* 十字归航道：白色圆点道 */
-  .fl-yard { position:absolute; background:rgba(230,245,235,.10); border-radius:8px; z-index:0; }
-  .fl-dot { position:absolute; width:3.6%; height:3.6%; border-radius:50%; transform:translate(-50%,-50%);
-    background:#eaf6ee; box-shadow:0 0 8px rgba(234,246,238,.75); }
-  .fl-dot.hd { width:4.4%; height:4.4%; border:1px solid currentColor; }
+  /* 十字归航道：白色圆点道（中线，往中心收窄） */
+  .fl-yard { position:absolute; border-radius:8px; z-index:0; }
+  /* 飞行线：贯穿整条臂的彩色虚线通道（在彩格走廊与白点回归线之间的草地上） */
+  .fl-flightline { position:absolute; z-index:2; display:flex; align-items:center; justify-content:center;
+    gap:16%; opacity:.95; pointer-events:none; }
+  .fl-flightline.h { flex-direction:row; }
+  .fl-flightline.v { flex-direction:column; }
+  .fl-flightline i { width:22%; height:2px; background:currentColor; border-radius:2px;
+    box-shadow:0 0 6px currentColor; flex:none; }
+  .fl-flightline.v i { width:2px; height:22%; }
+  .fl-flyarrow { font-size:clamp(9px,2vw,14px); font-style:normal; line-height:1; color:currentColor;
+    text-shadow:0 0 8px currentColor; }
+  .fl-dot { position:absolute; width:3.4%; height:3.4%; border-radius:50%; transform:translate(-50%,-50%);
+    background:#eaf6ee; box-shadow:0 0 8px rgba(234,246,238,.75); z-index:1; }
+  .fl-dot.hd { width:4.2%; height:4.2%; border:1px solid currentColor; }
   .fl-arrow { position:absolute; transform:translate(-50%,-50%); font-size:clamp(11px,2.4vw,17px);
     line-height:1; font-weight:500; text-shadow:0 0 8px currentColor; z-index:2; }
   /* 中心太阳 */
@@ -3586,29 +3596,52 @@
     var grid = document.createElement('div'); grid.className = 'fl-grid';
     board.appendChild(grid);
 
-    // ② 飞行线（归航道）：四条彩色通道 + 白色圆点 + 指向中心的箭头。
-    //    上=绿(seat2) 右=红(seat0) 下=黄(seat1) 左=蓝(seat3)，与各自起飞侧一致。
-    var yards = [
-      {x:7,y:3, w:1.2,h:5,   seat:2, arrow:'▼'}, // 上通道→中心
-      {x:11,y:7,w:5,  h:1.2, seat:0, arrow:'◀'}, // 右通道→中心
-      {x:7,y:11,w:1.2,h:5,   seat:1, arrow:'▲'}, // 下通道→中心
-      {x:3,y:7, w:5,  h:1.2, seat:3, arrow:'▶'}  // 左通道→中心
-    ];
-    yards.forEach(function (yd) {
-      var col = FE.COLORS[yd.seat];
-      var band = box(yd.x, yd.y, yd.w, yd.h);
-      band.className = 'fl-yard';
-      band.style.background = rgba(col.hex, .22); // 飞行线用本色淡染
-      board.appendChild(band);
-      // 箭头放在通道靠中心一端
-      var ar = document.createElement('div');
-      ar.className = 'fl-arrow';
-      ar.style.color = col.hex;
-      if (yd.arrow==='▼' || yd.arrow==='▲') { ar.style.left = pct(7); ar.style.top = (yd.arrow==='▼'?'27%':'73%'); }
-      else { ar.style.left = (yd.arrow==='◀'?'73%':'27%'); ar.style.top = pct(7); }
-      ar.textContent = yd.arrow;
-      board.appendChild(ar);
-    });
+    // ② 归航道白点 + 飞行线。
+    //    参考图精髓：白色圆点回归线在十字中线；飞行线是【横向贯穿臂】的彩色虚线箭头，
+    //    从两条彩格走廊外侧指向中间白点（"走廊—飞行线—回归线"三段并排，中间有明显草地空隙）。
+    //    上臂=绿 下臂=黄 左臂=粉蓝 右臂=蓝，颜色随该侧玩家。
+    function flyRow(y, fromX, toX, seat, arrow, flip){
+      // 水平飞行线：从 fromX 到 toX 的虚线段 + 末端箭头
+      var col = FE.COLORS[seat];
+      var mid = (fromX+toX)/2, span = Math.abs(toX-fromX);
+      var fl = box(mid, y, span, 0.8);
+      fl.className = 'fl-flightline h';
+      fl.style.color = col.hex;
+      for (var k=0;k<3;k++){ fl.appendChild(document.createElement('i')); }
+      var ar = document.createElement('span'); ar.className='fl-flyarrow'; ar.textContent=arrow;
+      fl.appendChild(ar);
+      board.appendChild(fl);
+    }
+    function flyCol(x, fromY, toY, seat, arrow){
+      var col = FE.COLORS[seat];
+      var mid = (fromY+toY)/2, span = Math.abs(toY-fromY);
+      var fl = box(x, mid, 0.8, span);
+      fl.className = 'fl-flightline v';
+      fl.style.color = col.hex;
+      for (var k=0;k<3;k++){ fl.appendChild(document.createElement('i')); }
+      var ar = document.createElement('span'); ar.className='fl-flyarrow'; ar.textContent=arrow;
+      fl.appendChild(ar);
+      board.appendChild(fl);
+    }
+    // 飞行线画在彩格走廊带与白点中线之间，避开四角机库。
+    // 上臂(绿 seat2)：左段 col5→col6 ▶、右段 col9→col8 ◀，指向中线col7
+    flyRow(2.5, 5.0, 6.2, 2, '▶');
+    flyRow(2.5, 9.0, 7.8, 2, '◀');
+    // 下臂(黄 seat1)
+    flyRow(12.5, 5.0, 6.2, 1, '▶');
+    flyRow(12.5, 9.0, 7.8, 1, '◀');
+    // 左臂(蓝 seat3)：上段 col2→col5 ▶、下段 col2→col5 ▶（横向指向中心区）
+    flyRow(5.2, 5.6, 6.4, 3, '▶');
+    flyRow(9.8, 5.6, 6.4, 3, '▶');
+    // 右臂(红 seat0)
+    flyRow(5.2, 9.4, 8.6, 0, '◀');
+    flyRow(9.8, 9.4, 8.6, 0, '◀');
+    // 上臂右/左 竖向贯穿虚线（参考图飞行线沿臂方向也有），补强"长飞行线"观感
+    flyCol(6.0, 1.0, 5.2, 2, '▼');
+    flyCol(8.0, 1.0, 5.2, 2, '▼');
+    flyCol(6.0, 9.8, 14.0, 1, '▲');
+    flyCol(8.0, 9.8, 14.0, 1, '▲');
+    // 归航道白色圆点（中线 col7/row7，往中心延伸）
     FE.COLORS.forEach(function (col, seat) {
       col.home.forEach(function (h, idx) {
         var dot = document.createElement('div');
