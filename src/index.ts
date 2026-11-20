@@ -3300,12 +3300,17 @@ async function handleShopBuy(request: Request, env: Env): Promise<Response> {
     return json({ error: "未知的游戏类型" }, 400);
   }
   const fee = gameFeeFor(type);
+  // 绑定有效 API Key → 付费对局全免（与界面「付费对局等费用全免」口径一致）
+  const keyActive = await hasActiveApiKey(env, user.username);
+  const charge = keyActive ? 0 : fee;
 
-  // 🔴 余额预检：余额不足直接拒绝，不进入写库
-  const acc = await env.DB.prepare("SELECT points FROM accounts WHERE username = ?")
-    .bind(user.username).first<{ points: number }>();
-  if (!acc || acc.points < fee) {
-    return json({ error: "Credits 不足，开局需要 " + fee + " Credits" }, 402);
+  // 🔴 余额预检：余额不足直接拒绝，不进入写库（免费用户跳过）
+  if (!keyActive) {
+    const acc = await env.DB.prepare("SELECT points FROM accounts WHERE username = ?")
+      .bind(user.username).first<{ points: number }>();
+    if (!acc || acc.points < fee) {
+      return json({ error: "Credits 不足，开局需要 " + fee + " Credits（或绑定有效 API Key 免费）" }, 402);
+    }
   }
 
   // 房间号：6 位大写字母数字（去掉易混的 I/O/0/1）
@@ -3320,25 +3325,24 @@ async function handleShopBuy(request: Request, env: Env): Promise<Response> {
   const reason = type === "match3" ? "消消乐开局" : "对弈开局";
   // 消消乐是单人局：直接进入 playing；棋类等对手加入后再由房主开局
   const status = type === "match3" ? "playing" : "waiting";
+  const payer = keyActive ? "apikey" : "self";
 
   // 🔴 原子事务：扣费 + 流水 + 建房 要么全部成功，要么全部回滚。
-  //    旧代码「先 spendCredits 再 INSERT」中间任一步失败 → 钱扣了房间没建，
-  //    前端只看到 500/网络错误 → 用户反复点 → 重复扣费 + 一堆空房。
-  //    D1 batch 是原子的；UPDATE 再加 points >= fee 条件做并发双保险。
+  //    D1 batch 是原子的；UPDATE 加 points >= charge 并发双保险；免费用户 charge=0 不扣费。
   try {
     await env.DB.batch([
       env.DB.prepare("UPDATE accounts SET points = points - ? WHERE username = ? AND points >= ?")
-        .bind(fee, user.username, fee),
+        .bind(charge, user.username, charge),
       env.DB.prepare("INSERT INTO credits_logs (username, delta, reason, created_at) VALUES (?, ?, ?, ?)")
-        .bind(user.username, -fee, reason, now),
+        .bind(user.username, -charge, reason + (keyActive ? "（API Key 全免）" : ""), now),
       env.DB.prepare(
         "INSERT INTO games (id, type, creator, opponent, status, payer, board, turn, winner, created_at) VALUES (?, ?, ?, NULL, ?, ?, NULL, NULL, NULL, ?)"
-      ).bind(id, type, user.username, status, "self", now),
+      ).bind(id, type, user.username, status, payer, now),
     ]);
   } catch {
     return json({ error: "创建房间失败，未扣费，请重试" }, 500);
   }
-  return json({ ok: true, roomId: id, type: type, fee: fee, creator: user.username });
+  return json({ ok: true, roomId: id, type: type, fee: charge, creator: user.username });
 }
 
 async function handleGameJoin(request: Request, env: Env): Promise<Response> {
@@ -3650,8 +3654,13 @@ async function handleFlightCreate(request: Request, env: Env): Promise<Response>
   if (!(ai >= 0 && ai <= 3)) return json({ error: "AI 个数必须是 0-3" }, 400);
   if (human + ai > 4) return json({ error: "真人与 AI 合计不能超过 4 人" }, 400);
 
-  const acc = await env.DB.prepare("SELECT points FROM accounts WHERE username = ?").bind(user.username).first<{ points: number }>();
-  if (!acc || acc.points < FLIGHT_FEE) return json({ error: "Credits 不足，飞行棋开局需要 " + FLIGHT_FEE + " Credits" }, 402);
+  // 绑定有效 API Key → 付费对局全免
+  const keyActive = await hasActiveApiKey(env, user.username);
+  const charge = keyActive ? 0 : FLIGHT_FEE;
+  if (!keyActive) {
+    const acc = await env.DB.prepare("SELECT points FROM accounts WHERE username = ?").bind(user.username).first<{ points: number }>();
+    if (!acc || acc.points < FLIGHT_FEE) return json({ error: "Credits 不足，飞行棋开局需要 " + FLIGHT_FEE + " Credits（或绑定有效 API Key 免费）" }, 402);
+  }
 
   let id = "";
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -3663,8 +3672,8 @@ async function handleFlightCreate(request: Request, env: Env): Promise<Response>
   const now = new Date().toISOString();
   try {
     const stmts: any[] = [
-      env.DB.prepare("UPDATE accounts SET points = points - ? WHERE username = ? AND points >= ?").bind(FLIGHT_FEE, user.username, FLIGHT_FEE),
-      env.DB.prepare("INSERT INTO credits_logs (username, delta, reason, created_at) VALUES (?, ?, ?, ?)").bind(user.username, -FLIGHT_FEE, "飞行棋开局(速率1.00)", now),
+      env.DB.prepare("UPDATE accounts SET points = points - ? WHERE username = ? AND points >= ?").bind(charge, user.username, charge),
+      env.DB.prepare("INSERT INTO credits_logs (username, delta, reason, created_at) VALUES (?, ?, ?, ?)").bind(user.username, -charge, "飞行棋开局" + (keyActive ? "(API Key 全免)" : ""), now),
       env.DB.prepare("INSERT INTO flight_rooms (id, creator, human, ai, status, state, winner, created_at) VALUES (?, ?, ?, ?, 'waiting', NULL, NULL, ?)")
         .bind(id, user.username, human, ai, now),
       env.DB.prepare("INSERT INTO flight_seats (room_id, username, seat, kind, joined_at) VALUES (?, ?, ?, 'human', ?)")
@@ -3682,7 +3691,7 @@ async function handleFlightCreate(request: Request, env: Env): Promise<Response>
     return json({ error: "创建房间失败，未扣费，请重试" }, 500);
   }
   const players = await flightPlayers(env, id);
-  return json({ ok: true, roomId: id, human, ai, rate: FLIGHT_RATE, fee: FLIGHT_FEE, creator: user.username, seat: 0, players, ready: human === 1 && ai === 0 });
+  return json({ ok: true, roomId: id, human, ai, rate: FLIGHT_RATE, fee: charge, creator: user.username, seat: 0, players, ready: human === 1 && ai === 0 });
 }
 
 // 加入房间：真人占剩余 human 席位之一；扣费原子占座；真人凑齐后 ready=true
@@ -3710,13 +3719,17 @@ async function handleFlightJoin(request: Request, env: Env): Promise<Response> {
   let seat = -1;
   for (let s = 0; s < room.human; s++) if (!seats.some((x) => x.seat === s)) { seat = s; break; }
   if (seat < 0) return json({ error: "真人席位已满" }, 409);
-  const acc = await env.DB.prepare("SELECT points FROM accounts WHERE username = ?").bind(user.username).first<{ points: number }>();
-  if (!acc || acc.points < FLIGHT_FEE) return json({ error: "Credits 不足，加入需要 " + FLIGHT_FEE + " Credits" }, 402);
+  const keyActive = await hasActiveApiKey(env, user.username);
+  const charge = keyActive ? 0 : FLIGHT_FEE;
+  if (!keyActive) {
+    const acc = await env.DB.prepare("SELECT points FROM accounts WHERE username = ?").bind(user.username).first<{ points: number }>();
+    if (!acc || acc.points < FLIGHT_FEE) return json({ error: "Credits 不足，加入需要 " + FLIGHT_FEE + " Credits（或绑定有效 API Key 免费）" }, 402);
+  }
   const now = new Date().toISOString();
   try {
     await env.DB.batch([
-      env.DB.prepare("UPDATE accounts SET points = points - ? WHERE username = ? AND points >= ?").bind(FLIGHT_FEE, user.username, FLIGHT_FEE),
-      env.DB.prepare("INSERT INTO credits_logs (username, delta, reason, created_at) VALUES (?, ?, ?, ?)").bind(user.username, -FLIGHT_FEE, "飞行棋加入(速率1.00)", now),
+      env.DB.prepare("UPDATE accounts SET points = points - ? WHERE username = ? AND points >= ?").bind(charge, user.username, charge),
+      env.DB.prepare("INSERT INTO credits_logs (username, delta, reason, created_at) VALUES (?, ?, ?, ?)").bind(user.username, -charge, "飞行棋加入" + (keyActive ? "(API Key 全免)" : ""), now),
       env.DB.prepare("INSERT INTO flight_seats (room_id, username, seat, kind, joined_at) VALUES (?, ?, ?, 'human', ?)").bind(id, user.username, seat, now)
     ]);
   } catch { return json({ error: "加入失败，未扣费，请重试" }, 500); }

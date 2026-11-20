@@ -740,12 +740,11 @@
     border:1.5px dashed rgba(255,255,255,.55); background:rgba(255,255,255,.08); }
   /* 四角三角（拐弯提示） */
   .fl-tri { position:absolute; width:0; height:0; }
-  .fl-piece { position:absolute; width:4.6%; height:4.6%; border-radius:50% 50% 46% 46%; transform:translate(-50%,-50%);
-    border:2px solid #fff; box-shadow:0 0 10px currentColor, inset 0 0 5px rgba(255,255,255,.6);
-    display:flex; align-items:center; justify-content:center; font-size:clamp(8px,1.8vw,12px); font-weight:500; color:#fff;
+  .fl-piece { position:absolute; width:7%; height:7%; border-radius:50% 50% 42% 42%; transform:translate(-50%,-50%);
+    border:2px solid #fff; box-shadow:0 0 12px currentColor, inset 0 0 6px rgba(255,255,255,.6);
+    display:flex; align-items:center; justify-content:center; font-size:clamp(11px,2.6vw,17px); font-weight:500; color:#fff;
     transition:left .4s cubic-bezier(.4,0,.2,1), top .4s cubic-bezier(.4,0,.2,1); cursor:pointer; z-index:3; }
   .fl-piece.sel { outline:3px solid #fff; outline-offset:2px; z-index:5; }
-  .fl-piece.tiny { width:3.6%; height:3.6%; font-size:clamp(7px,1.6vw,11px); }
   .fl-controls { text-align:center; margin-top:10px; }
   .fl-turn { font-size:13px; color:var(--cyan); min-height:20px; }
   .fl-dice-wrap { display:flex; justify-content:center; margin:8px 0; }
@@ -2547,16 +2546,16 @@
   var COLORS = [
     { key:'red',    name:'红', hex:'#ff3b5c', start:39,  // 右下机场 → 右通道
       home:[[13,7],[12,7],[11,7],[10,7],[9,7],[8,7]],
-      base:[[11,11],[12.6,11],[11,12.6],[12.6,12.6]] },
+      base:[[10.2,10.2],[11.8,10.2],[10.2,11.8],[11.8,11.8]] },
     { key:'yellow', name:'黄', hex:'#ffcf3d', start:0,   // 左下机场 → 下通道
       home:[[7,13],[7,12],[7,11],[7,10],[7,9],[7,8]],
-      base:[[2.4,11],[4,11],[2.4,12.6],[4,12.6]] },
+      base:[[2.2,10.2],[3.8,10.2],[2.2,11.8],[3.8,11.8]] },
     { key:'green',  name:'绿', hex:'#25e07a', start:26,  // 右上机场 → 上通道
       home:[[7,1],[7,2],[7,3],[7,4],[7,5],[7,6]],
-      base:[[11,2.4],[12.6,2.4],[11,4],[12.6,4]] },
+      base:[[10.2,2.2],[11.8,2.2],[10.2,3.8],[11.8,3.8]] },
     { key:'blue',   name:'蓝', hex:'#33aaff', start:13,  // 左上机场 → 左通道（修复起飞串到右侧的bug）
       home:[[1,7],[2,7],[3,7],[4,7],[5,7],[6,7]],
-      base:[[2.4,2.4],[4,2.4],[2.4,4],[4,4]] }
+      base:[[2.2,2.2],[3.8,2.2],[2.2,3.8],[3.8,3.8]] }
   ];
   function newState(n) {
     n = Math.max(1,Math.min(4,n|0));
@@ -3620,16 +3619,16 @@
       });
     });
 
-    // ③ 四角机场：够用的紧凑小机库（3.6×3.6）+ 4 个圆形停机位
+    // ③ 四角机场：机库铺满四角、紧贴环道拐角（参考图布局），4 停机位 2×2 紧凑排布
     var HANGARS = [
-      {x:3.2,y:3.2, seat:3},  // 左上 蓝
-      {x:11.8,y:3.2,seat:2},  // 右上 绿
-      {x:3.2,y:11.8,seat:1},  // 左下 黄
-      {x:11.8,y:11.8,seat:0}  // 右下 红
+      {x:3, y:3,  seat:3},  // 左上 蓝
+      {x:11,y:3,  seat:2},  // 右上 绿
+      {x:3, y:11, seat:1},  // 左下 黄
+      {x:11,y:11, seat:0}   // 右下 红
     ];
     HANGARS.forEach(function (hg) {
       var col = FE.COLORS[hg.seat];
-      var hb = box(hg.x, hg.y, 3.8, 3.8);
+      var hb = box(hg.x, hg.y, 5.2, 5.2);
       hb.className = 'fl-hangar';
       hb.style.color = col.hex;
       hb.style.background = rgba(col.hex, .14);
@@ -3676,27 +3675,29 @@
     var sun = document.createElement('div'); sun.className='fl-sun'; sun.textContent='☀';
     board.appendChild(sun);
 
-    // ⑦ 飞机
+    // ⑦ 飞机：开局前(state为空)也按初始布局把 4 色飞机停进各自机库，不留空圈
     var st = fl.state ? FE.parse(fl.state) : null;
-    if (st) {
-      for (var p=0;p<4;p++){
-        if(!st.pieces[p]) continue;
-        var col = FE.COLORS[p], baseIdx=0;
-        for (var pi=0;pi<4;pi++){
-          var pr = st.pieces[p][pi];
-          if (pr>=FE.GOAL) continue;
-          var pos = FE.cellOf(p,pr), px=0, py=0;
-          if (pos.type==='base'){ var bp=col.base[baseIdx++]; px=bp[0]; py=bp[1]; }
-          else if (pos.pos){ px=pos.pos[0]; py=pos.pos[1]; }
-          var piece = document.createElement('div');
-          piece.className='fl-piece';
-          piece.style.left = pct(px); piece.style.top = pct(py);
-          piece.style.background = col.hex; piece.style.color = col.hex;
-          piece.textContent = '✈';
-          piece.title = col.name+' 机 '+(pi+1)+(pr<0?'（机场）':'（行进 '+pr+'）');
-          (function(seat,pidx){ piece.addEventListener('click',function(){flChoosePiece(seat,pidx);}); })(p,pi);
-          board.appendChild(piece);
-        }
+    var nPlayers = fl ? (fl.players ? fl.players.filter(function(x){return x.kind==='human'||x.kind==='ai';}).length : 4) : 4;
+    if (nPlayers < 1) nPlayers = 4;
+    for (var p=0;p<4;p++){
+      if (p >= nPlayers && !st) continue;
+      var col = FE.COLORS[p], baseIdx=0;
+      // 未开局：4 架都在机场(-1)；已开局：读实际 progress
+      var arr = st && st.pieces[p] ? st.pieces[p] : [-1,-1,-1,-1];
+      for (var pi=0;pi<4;pi++){
+        var pr = arr[pi];
+        if (pr>=FE.GOAL) continue;
+        var pos = FE.cellOf(p,pr), px=0, py=0;
+        if (pos.type==='base'){ var bp=col.base[baseIdx++]; px=bp[0]; py=bp[1]; }
+        else if (pos.pos){ px=pos.pos[0]; py=pos.pos[1]; }
+        var piece = document.createElement('div');
+        piece.className='fl-piece';
+        piece.style.left = pct(px); piece.style.top = pct(py);
+        piece.style.background = col.hex; piece.style.color = col.hex;
+        piece.textContent = '✈';
+        piece.title = col.name+' 机 '+(pi+1)+(pr<0?'（机场待命）':'（行进 '+pr+'）');
+        (function(seat,pidx){ piece.addEventListener('click',function(){flChoosePiece(seat,pidx);}); })(p,pi);
+        board.appendChild(piece);
       }
     }
   }
@@ -4760,7 +4761,7 @@
           setRoomStatus(roomStatusCache);
         }
       }).catch(function () {});
-    }, 2000);
+    }, 800); // 与飞行棋一致：五子棋/围棋走子密，2秒轮询太慢会让人误以为「连接异常」
   }
 
   // 初始化/进入棋局
