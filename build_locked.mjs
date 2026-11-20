@@ -12,7 +12,14 @@ try { loadEsbuild = require("esbuild"); }
 catch { loadEsbuild = require("C:/Users/June2022/.workbuddy/binaries/node/workspace/node_modules/esbuild/lib/main.js"); }
 const { build } = loadEsbuild;
 
-const html = fs.readFileSync(path.join(ROOT, "public", "index.html"), "utf8");
+let html = fs.readFileSync(path.join(ROOT, "public", "index.html"), "utf8");
+// 把飞行棋棋盘底图内联为 data URI（worker 拦截所有路径，静态文件会 404）
+const boardImg = path.join(ROOT, "public", "fl_board.jpg");
+if (fs.existsSync(boardImg)) {
+  const b64 = fs.readFileSync(boardImg).toString("base64");
+  html = html.replace("bg.src = 'fl_board.jpg'", "bg.src = 'data:image/jpeg;base64," + b64 + "'");
+  console.log("INLINED board image", Math.round(b64.length/1024), "KB base64");
+}
 const esc = html.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\$\{/g, "\\${");
 const htmlTs = "export const html = `" + esc + "`;\n";
 
@@ -38,5 +45,5 @@ const result = await build({
 
 if (result.errors && result.errors.length) { console.error("BUILD FAILED"); process.exit(1); }
 fs.writeFileSync(path.join(OUT, "_worker.js"), result.outputFiles[0].text);
-fs.copyFileSync(path.join(ROOT, "public", "index.html"), path.join(OUT, "index.html"));
-console.log("WROTE dist2/_worker.js (" + (result.outputFiles[0].text.length / 1024).toFixed(1) + " KB) + index.html");
+fs.writeFileSync(path.join(OUT, "index.html"), html); // 用内联图片后的 HTML
+console.log("WROTE dist2/_worker.js (" + (result.outputFiles[0].text.length / 1024).toFixed(1) + " KB) + index.html (inline img)");

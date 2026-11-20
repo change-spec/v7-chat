@@ -712,9 +712,10 @@
   .fl-pname { color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:96px; }
   .fl-pseat { color:var(--dim); font-size:10px; }
   .fl-stage { display:flex; justify-content:center; padding:8px 0; }
-  .fl-board { position:relative; width:min(94vw,600px); aspect-ratio:1/1; background:#123a26;
-    border:3px solid #ff2e97; border-radius:20px;
-    box-shadow:0 0 28px rgba(255,46,151,.45), inset 0 0 50px rgba(0,0,0,.65); overflow:hidden; }
+  .fl-board { position:relative; width:min(94vw,600px); aspect-ratio:1/1; background:#fff;
+    border:3px solid #ff2e97; border-radius:14px;
+    box-shadow:0 0 28px rgba(255,46,151,.45); overflow:hidden; }
+  .fl-board-img { position:absolute; inset:0; width:100%; height:100%; object-fit:fill; display:block; pointer-events:none; }
   .fl-grid { position:absolute; inset:0; display:grid; grid-template-columns:repeat(15,1fr); grid-template-rows:repeat(15,1fr); }
   .fl-cell { position:relative; }
   /* 外圈方格环道：宽大方块，四色（box() 已定位尺寸，不再 margin） */
@@ -750,9 +751,10 @@
     border:1.5px dashed rgba(255,255,255,.55); background:rgba(255,255,255,.08); }
   /* 四角三角（拐弯提示） */
   .fl-tri { position:absolute; width:0; height:0; }
-  .fl-piece { position:absolute; width:7%; height:7%; border-radius:50% 50% 42% 42%; transform:translate(-50%,-50%);
-    border:2px solid #fff; box-shadow:0 0 12px currentColor, inset 0 0 6px rgba(255,255,255,.6);
-    display:flex; align-items:center; justify-content:center; font-size:clamp(11px,2.6vw,17px); font-weight:500; color:#fff;
+  .fl-piece { position:absolute; width:4.9%; height:4.9%; border-radius:50%; transform:translate(-50%,-50%);
+    border:1.5px solid rgba(255,255,255,.9); box-shadow:0 1px 4px rgba(0,0,0,.45), 0 0 6px currentColor;
+    display:flex; align-items:center; justify-content:center; font-size:clamp(9px,1.8vw,13px); font-weight:700; color:#fff;
+    text-shadow:0 1px 2px rgba(0,0,0,.6);
     transition:left .4s cubic-bezier(.4,0,.2,1), top .4s cubic-bezier(.4,0,.2,1); cursor:pointer; z-index:3; }
   .fl-piece.sel { outline:3px solid #fff; outline-offset:2px; z-index:5; }
   .fl-controls { text-align:center; margin-top:10px; }
@@ -2556,16 +2558,16 @@
   var COLORS = [
     { key:'red',    name:'红', hex:'#ff3b5c', start:39,  // 右下机场 → 右通道
       home:[[13,7],[12,7],[11,7],[10,7],[9,7],[8,7]],
-      base:[[12,12],[13,12],[12,13],[13,13]] },
+      base:[[12.51,12.55],[13.85,12.55],[12.51,13.84],[13.85,13.84]] },
     { key:'yellow', name:'黄', hex:'#ffcf3d', start:0,   // 左下机场 → 下通道
       home:[[7,13],[7,12],[7,11],[7,10],[7,9],[7,8]],
-      base:[[2,12],[3,12],[2,13],[3,13]] },
+      base:[[1.16,12.52],[2.44,12.52],[1.16,13.86],[2.44,13.87]] },
     { key:'green',  name:'绿', hex:'#25e07a', start:26,  // 右上机场 → 上通道
       home:[[7,1],[7,2],[7,3],[7,4],[7,5],[7,6]],
-      base:[[12,2],[13,2],[12,3],[13,3]] },
-    { key:'blue',   name:'蓝', hex:'#33aaff', start:13,  // 左上机场 → 左通道（修复起飞串到右侧的bug）
+      base:[[12.54,1.13],[13.83,1.13],[12.54,2.47],[13.83,2.48]] },
+    { key:'blue',   name:'蓝', hex:'#33aaff', start:13,  // 左上机场 → 左通道
       home:[[1,7],[2,7],[3,7],[4,7],[5,7],[6,7]],
-      base:[[2,2],[3,2],[2,3],[3,3]] }
+      base:[[1.13,1.16],[2.47,1.16],[1.13,2.45],[2.47,2.45]] }
   ];
   function newState(n) {
     n = Math.max(1,Math.min(4,n|0));
@@ -3581,130 +3583,20 @@
     if (!board || !FE) return;
     board.innerHTML = '';
     function pct(v){ return ((v + 0.5) / 15 * 100) + '%'; }
-    function rgba(hex, a){ var n=parseInt(hex.slice(1),16); return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')'; }
-    function box(x, y, w, h){ // 以格中心为基准的区块
-      var e = document.createElement('div');
-      e.style.position = 'absolute';
-      e.style.left = ((x - w/2 + 0.5) / 15 * 100) + '%';
-      e.style.top = ((y - h/2 + 0.5) / 15 * 100) + '%';
-      e.style.width = (w / 15 * 100) + '%';
-      e.style.height = (h / 15 * 100) + '%';
-      return e;
-    }
 
-    // ① 底层网格容器（不填格子，避免空 div 遮挡环道）
-    var grid = document.createElement('div'); grid.className = 'fl-grid';
-    board.appendChild(grid);
+    // 棋盘底图：使用开源 standard 飞行棋棋盘（已配色映射为蓝左上/绿右上/黄左下/红右下）
+    var bg = document.createElement('img');
+    bg.src = 'fl_board.jpg'; bg.className = 'fl-board-img';
+    bg.alt = '飞行棋棋盘';
+    board.appendChild(bg);
 
-    // ② 飞行区（草地+虚线飞行线）+ 归航道白点。
-    //    参考图精确结构：每条臂由「彩格走廊(外) → 草地飞行线(中,2列×3格) → 白点回归线(中列)」组成。
-    //    飞行区坐标：上臂 col6/8 的 row2-4、下臂 col6/8 的 row10-12、
-    //    左臂 row6/8 的 col2-4、右臂 row6/8 的 col10-12。虚线箭头指向中心。
-    function isFlyZone(c, r){
-      if ((c===6||c===8) && r>=2 && r<=5) return true;   // 上臂飞行区(4格长)
-      if ((c===6||c===8) && r>=9 && r<=12) return true;  // 下臂飞行区(4格长)
-      if ((r===6||r===8) && c>=2 && c<=5) return true;   // 左臂飞行区(4格长)
-      if ((r===6||r===8) && c>=9 && c<=12) return true;  // 右臂飞行区(4格长)
-      return false;
-    }
-    // 飞行线：4 组，每组 2 条平行虚线，箭头指向中心。
-    function flyLine(x1,y1,x2,y2,seat,arrow){
-      var col = FE.COLORS[seat];
-      var horiz = (y1===y2);
-      var cx=(x1+x2)/2, cy=(y1+y2)/2;
-      var span = horiz ? Math.abs(x2-x1)+0.4 : Math.abs(y2-y1)+0.4;
-      var fl = box(cx, cy, horiz?span:0.62, horiz?0.62:span);
-      fl.className = 'fl-flightline ' + (horiz?'h':'v');
-      fl.style.color = col.hex;
-      for (var k=0;k<3;k++){ fl.appendChild(document.createElement('i')); }
-      var ar=document.createElement('span'); ar.className='fl-flyarrow'; ar.textContent=arrow;
-      fl.appendChild(ar);
-      board.appendChild(fl);
-    }
-    // 上臂(绿 seat2)：col6/col8 的 row2→row5 竖向虚线 ▼
-    flyLine(6,2,6,5,2,'▼'); flyLine(8,2,8,5,2,'▼');
-    // 下臂(黄 seat1)：col6/col8 的 row12→row9 竖向虚线 ▲
-    flyLine(6,12,6,9,1,'▲'); flyLine(8,12,8,9,1,'▲');
-    // 左臂(蓝 seat3)：row6/row8 的 col2→col5 横向虚线 ▶
-    flyLine(2,6,5,6,3,'▶'); flyLine(2,8,5,8,3,'▶');
-    // 右臂(红 seat0)：row6/row8 的 col12→col9 横向虚线 ◀
-    flyLine(12,6,9,6,0,'◀'); flyLine(12,8,9,8,0,'◀');
-    // 归航道白色圆点（中线 col7/row7，往中心延伸）
-    FE.COLORS.forEach(function (col, seat) {
-      col.home.forEach(function (h, idx) {
-        var dot = document.createElement('div');
-        dot.className = 'fl-dot' + (idx === col.home.length - 1 ? ' hd' : '');
-        dot.style.left = pct(h[0]); dot.style.top = pct(h[1]);
-        dot.style.color = col.hex;
-        board.appendChild(dot);
-      });
-    });
-
-    // ③ 四角机场：机库铺满四角、紧贴环道拐角（参考图布局），4 停机位 2×2 紧凑排布
-    var HANGARS = [
-      {x:2.5, y:2.5,  seat:3},  // 左上 蓝
-      {x:12.5,y:2.5,  seat:2},  // 右上 绿
-      {x:2.5, y:12.5, seat:1},  // 左下 黄
-      {x:12.5,y:12.5, seat:0}   // 右下 红
-    ];
-    HANGARS.forEach(function (hg) {
-      var col = FE.COLORS[hg.seat];
-      var hb = box(hg.x, hg.y, 2.7, 2.7); // 机库只够停4架，紧凑贴角
-      hb.className = 'fl-hangar';
-      hb.style.color = col.hex;
-      hb.style.background = rgba(col.hex, .14);
-      board.appendChild(hb);
-      col.base.forEach(function (b) {
-        var pad = document.createElement('div');
-        pad.className = 'fl-pad';
-        pad.style.left = pct(b[0]); pad.style.top = pct(b[1]);
-        pad.style.color = col.hex;
-        board.appendChild(pad);
-      });
-    });
-
-    // ④ 外圈方格环道 52 格：飞行区不画彩格（露出草地+虚线飞行线），其余按四色循环着色
-    for (var i=0;i<FE.PATH.length;i++){
-      var c = FE.PATH[i];
-      if (isFlyZone(c[0], c[1])) continue; // 飞行区留作草地，画飞行线
-      var isStart = FE.COLORS.some(function(col){return col.start===i;});
-      var cellCol = FE.COLORS[FE.cellColor(i)];
-      var el = box(c[0], c[1], 1, 1);
-      el.className = 'fl-cell track' + (isStart ? ' start' : '');
-      el.style.color = cellCol.hex;
-      board.appendChild(el);
-    }
-
-    // ⑤ 四角三角（拐弯提示，四色）
-    var TRIS = [
-      {x:6,y:6,c:'#25e07a',dir:'bl'}, {x:8,y:6,c:'#ffcf3d',dir:'br'},
-      {x:6,y:8,c:'#ff3b5c',dir:'tl'}, {x:8,y:8,c:'#33aaff',dir:'tr'}
-    ];
-    // 用 CSS 边框三角，贴在每个臂根外侧
-    TRIS.forEach(function (t) {
-      var tri = box(t.x, t.y, 1, 1);
-      var s = 0; // 透明边
-      tri.style.background = t.c;
-      tri.style.opacity = '.85';
-      tri.style.clipPath = t.dir==='bl' ? 'polygon(100% 0,100% 100%,0 100%)'
-        : t.dir==='br' ? 'polygon(0 0,100% 100%,0 100%)'
-        : t.dir==='tl' ? 'polygon(100% 0,100% 100%,0 0)'
-        : 'polygon(0 0,100% 0,0 100%)';
-      board.appendChild(tri);
-    });
-
-    // ⑥ 中心太阳
-    var sun = document.createElement('div'); sun.className='fl-sun'; sun.textContent='☀';
-    board.appendChild(sun);
-
-    // ⑦ 飞机：开局前(state为空)也按初始布局把 4 色飞机停进各自机库，不留空圈
+    // 飞机：开局前(state为空)也按初始布局把 4 色飞机停进各自停机位；图上已画好机场/停机位/彩格/飞行线/中心。
     var st = fl.state ? FE.parse(fl.state) : null;
     var nPlayers = fl ? (fl.players ? fl.players.filter(function(x){return x.kind==='human'||x.kind==='ai';}).length : 4) : 4;
     if (nPlayers < 1) nPlayers = 4;
     for (var p=0;p<4;p++){
       if (p >= nPlayers && !st) continue;
       var col = FE.COLORS[p], baseIdx=0;
-      // 未开局：4 架都在机场(-1)；已开局：读实际 progress
       var arr = st && st.pieces[p] ? st.pieces[p] : [-1,-1,-1,-1];
       for (var pi=0;pi<4;pi++){
         var pr = arr[pi];
@@ -3714,7 +3606,8 @@
         else if (pos.pos){ px=pos.pos[0]; py=pos.pos[1]; }
         var piece = document.createElement('div');
         piece.className='fl-piece';
-        piece.style.left = pct(px); piece.style.top = pct(py);
+        piece.style.left = ((px+0.5)/15*100) + '%';
+        piece.style.top = ((py+0.5)/15*100) + '%';
         piece.style.background = col.hex; piece.style.color = col.hex;
         piece.textContent = '✈';
         piece.title = col.name+' 机 '+(pi+1)+(pr<0?'（机场待命）':'（行进 '+pr+'）');
