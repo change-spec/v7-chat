@@ -3601,13 +3601,15 @@
       for (var pi=0;pi<4;pi++){
         var pr = arr[pi];
         if (pr>=FE.GOAL) continue;
-        var pos = FE.cellOf(p,pr), px=0, py=0;
-        if (pos.type==='base'){ var bp=col.base[baseIdx++]; px=bp[0]; py=bp[1]; }
+        var pos = FE.cellOf(p,pr), px=0, py=0, isBase=false;
+        if (pos.type==='base'){ var bp=col.base[baseIdx++]; px=bp[0]; py=bp[1]; isBase=true; }
         else if (pos.pos){ px=pos.pos[0]; py=pos.pos[1]; }
         var piece = document.createElement('div');
         piece.className='fl-piece';
-        piece.style.left = ((px+0.5)/15*100) + '%';
-        piece.style.top = ((py+0.5)/15*100) + '%';
+        // base 是从图上实测的连续坐标(已含格内偏移)，直接 /15；轨道/home 是整数格索引，需 +0.5
+        var fx = isBase ? px : (px+0.5), fy = isBase ? py : (py+0.5);
+        piece.style.left = (fx/15*100) + '%';
+        piece.style.top = (fy/15*100) + '%';
         piece.style.background = col.hex; piece.style.color = col.hex;
         piece.textContent = '✈';
         piece.title = col.name+' 机 '+(pi+1)+(pr<0?'（机场待命）':'（行进 '+pr+'）');
